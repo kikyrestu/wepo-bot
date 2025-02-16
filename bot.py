@@ -18,6 +18,10 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # Simpan tiket yang aktif
 active_tickets = {}
 
+# Tambahin variabel baru untuk welcome message
+welcome_messages = {}
+welcome_channels = {}
+
 @bot.event
 async def on_ready():
     print(f'Waduh! {bot.user} udah online nih!')
@@ -140,6 +144,20 @@ async def joke(ctx):
     ]
     import random
     await ctx.send(random.choice(jokes))
+
+@bot.command(name='sw')
+@commands.has_permissions(administrator=True)
+async def set_welcome(ctx, *, message):
+    """Set welcome message. Pake {member} buat mention member barunya."""
+    welcome_messages[ctx.guild.id] = message
+    await ctx.send(f'Sip bre! Welcome message udah diset:\n{message}')
+
+@bot.command(name='swc')
+@commands.has_permissions(administrator=True)
+async def set_welcome_channel(ctx, channel: discord.TextChannel):
+    """Set channel buat welcome message"""
+    welcome_channels[ctx.guild.id] = channel.id
+    await ctx.send(f'Oke bre! Welcome message bakal muncul di {channel.mention}')
 
 # Jalanin bot pake token
 bot.run(os.getenv('DISCORD_TOKEN'))
