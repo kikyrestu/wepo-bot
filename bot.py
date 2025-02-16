@@ -162,5 +162,44 @@ async def set_welcome_channel(ctx, channel: discord.TextChannel):
     welcome_channels[ctx.guild.id] = channel.id
     await ctx.send(f'Oke bre! Welcome message bakal muncul di {channel.mention}')
 
+@bot.command(name='fakeuser')
+@commands.has_permissions(administrator=True)
+async def fake_join(ctx, count: int = 1):
+    """Bikin fake user join buat test welcome message. Cara pake:
+    !fakeuser 5 -> bikin 5 fake user
+    !fakeuser -> bikin 1 fake user"""
+    
+    if count > 10:
+        await ctx.send('Waduh, jangan kebanyakan bre! Max 10 user aja ya.')
+        return
+        
+    fake_names = [
+        "TestUser", "DummyMember", "FakeGuy", "BotTester", 
+        "MockUser", "TestDummy", "FakePerson", "TesterBot",
+        "DummyUser", "TestPerson"
+    ]
+    
+    import random
+    
+    # Cek kalo server udah set welcome message dan channel
+    if ctx.guild.id not in welcome_messages or ctx.guild.id not in welcome_channels:
+        await ctx.send('Setup welcome message dulu bre! Pake !sw dan !swc')
+        return
+        
+    channel_id = welcome_channels[ctx.guild.id]
+    channel = ctx.guild.get_channel(channel_id)
+    
+    if not channel:
+        await ctx.send('Channel welcome ga ketemu bre! Setup ulang pake !swc')
+        return
+        
+    # Generate fake users
+    for i in range(count):
+        fake_name = f"{random.choice(fake_names)}{random.randint(1, 999)}"
+        message = welcome_messages[ctx.guild.id].replace('{member}', f"**{fake_name}**")
+        await channel.send(message)
+    
+    await ctx.send(f'Done bre! Udah gw generate {count} fake user di {channel.mention}')
+
 # Jalanin bot pake token
 bot.run(os.getenv('DISCORD_TOKEN'))
