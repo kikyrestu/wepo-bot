@@ -148,14 +148,17 @@ async def joke(ctx):
 @bot.command(name='sw')
 @commands.has_permissions(administrator=True)
 async def set_welcome(ctx, *, message):
-    """Set welcome message. Pake {member} buat mention member barunya."""
+    """Set welcome message. Cara pake:
+    !sw Halo {member}! Welcome ke server!
+    Note: {member} bakal ke-replace jadi mention member baru"""
     welcome_messages[ctx.guild.id] = message
     await ctx.send(f'Sip bre! Welcome message udah diset:\n{message}')
 
 @bot.command(name='swc')
 @commands.has_permissions(administrator=True)
 async def set_welcome_channel(ctx, channel: discord.TextChannel):
-    """Set channel buat welcome message"""
+    """Set channel buat welcome message. Cara pake:
+    !swc #nama-channel"""
     welcome_channels[ctx.guild.id] = channel.id
     await ctx.send(f'Oke bre! Welcome message bakal muncul di {channel.mention}')
 
