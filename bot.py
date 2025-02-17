@@ -2,6 +2,9 @@ import os
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
+import youtube_dl
+from discord import FFmpegPCMAudio
+from youtube_dl import YoutubeDL
 
 # Load token dari file .env
 load_dotenv()
@@ -21,6 +24,10 @@ active_tickets = {}
 # Tambahin variabel baru untuk welcome message
 welcome_messages = {}
 welcome_channels = {}
+
+# Tambahin dictionary buat nyimpen queue musik per server
+music_queue = {}
+current_song = {}
 
 @bot.event
 async def on_ready():
@@ -200,6 +207,28 @@ async def fake_join(ctx, count: int = 1):
         await channel.send(message)
     
     await ctx.send(f'Done bre! Udah gw generate {count} fake user di {channel.mention}')
+
+@bot.command(name='join')
+async def join(ctx):
+    if ctx.author.voice is None:
+        await ctx.send("Lu join voice channel dulu dong bro!")
+        return
+    
+    voice_channel = ctx.author.voice.channel
+    if ctx.voice_client is None:
+        await voice_channel.connect()
+    else:
+        await ctx.voice_client.move_to(voice_channel)
+    
+    await ctx.send(f'Joined {voice_channel.name} 🎵')
+
+@bot.command(name='leave')
+async def leave(ctx):
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        await ctx.send("Cabut dulu ya bre! 👋")
+    else:
+        await ctx.send("Gua ga di voice channel mana-mana bre!")
 
 # Jalanin bot pake token
 bot.run(os.getenv('DISCORD_TOKEN'))
