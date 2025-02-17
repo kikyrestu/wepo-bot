@@ -230,7 +230,7 @@ async def leave(ctx):
         await ctx.send("Gua ga di voice channel mana-mana bre!")
 
 @bot.command(name='play')
-async def play(ctx, *, url):
+async def play(ctx, *, query):
     if ctx.author.voice is None:
         await ctx.send("Lu join voice channel dulu dong bro!")
         return
@@ -247,29 +247,45 @@ async def play(ctx, *, url):
         'logtostderr': False,
         'quiet': True,
         'no_warnings': True,
-        'default_search': 'auto',
+        'default_search': 'ytsearch',
         'source_address': '0.0.0.0'
     }
     FFMPEG_OPTIONS = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 'options': '-vn'}
     
     with youtube_dl.YoutubeDL(YDL_OPTIONS) as ydl:
         try:
-            info = ydl.extract_info(url, download=False)
+            # Kalo bukan URL, search dulu
+            if not query.startswith('https://'):
+                await ctx.send(f'🔎 Nyari: {query}')
+                query = f'ytsearch:{query}'
+            
+            info = ydl.extract_info(query, download=False)
+            
+            # Kalo hasil search, ambil video pertama
+            if 'entries' in info:
+                info = info['entries'][0]
+            
             URL = info['url']
             title = info['title']
+            duration = info.get('duration', 0)  # Dapetin durasi dalam detik
+            
+            # Format durasi jadi menit:detik
+            minutes = duration // 60
+            seconds = duration % 60
+            duration_text = f'{minutes}:{seconds:02d}'
             
             # Tambahin ke queue kalo udah ada yang main
             if ctx.voice_client.is_playing():
                 if ctx.guild.id not in music_queue:
                     music_queue[ctx.guild.id] = []
-                music_queue[ctx.guild.id].append({'url': URL, 'title': title})
-                await ctx.send(f'Added to queue: {title}')
+                music_queue[ctx.guild.id].append({'url': URL, 'title': title, 'duration': duration_text})
+                await ctx.send(f'Added to queue: {title} ({duration_text})')
                 return
             
             # Main musiknya
             ctx.voice_client.play(FFmpegPCMAudio(URL, **FFMPEG_OPTIONS))
-            current_song[ctx.guild.id] = title
-            await ctx.send(f'Now playing: {title} 🎶')
+            current_song[ctx.guild.id] = {'title': title, 'duration': duration_text}
+            await ctx.send(f'Now playing: {title} ({duration_text}) 🎶')
             
         except Exception as e:
             await ctx.send(f'Waduh error bre: {str(e)}')
@@ -303,10 +319,11 @@ async def queue(ctx):
         
     queue_list = "🎵 Queue:\n"
     for i, song in enumerate(music_queue[ctx.guild.id], 1):
-        queue_list += f"{i}. {song['title']}\n"
+        queue_list += f"{i}. {song['title']} ({song['duration']})\n"
     
     if ctx.guild.id in current_song:
-        queue_list = f"🎵 Now Playing: {current_song[ctx.guild.id]}\n\n" + queue_list
+        current = current_song[ctx.guild.id]
+        queue_list = f"🎵 Now Playing: {current['title']} ({current['duration']})\n\n" + queue_list
         
     await ctx.send(queue_list)
 
