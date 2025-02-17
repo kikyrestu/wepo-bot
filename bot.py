@@ -1738,5 +1738,120 @@ async def setup_samp_monitor(ctx, ip, port: int = 7777, *, channel: discord.Text
     except Exception as e:
         await ctx.send(f"Error: {str(e)}")
 
+@bot.command(name='movecat')
+@commands.has_permissions(administrator=True)
+async def move_category(ctx, category: discord.CategoryChannel, position: int):
+    """Pindahin posisi category
+    Contoh: !movecat "GAMING" 1"""
+    try:
+        # Check posisi valid
+        if position < 0:
+            return await ctx.send("❌ Posisi harus lebih dari 0!")
+            
+        # Get max position
+        max_position = len(ctx.guild.categories) - 1
+        if position > max_position:
+            return await ctx.send(f"❌ Posisi maksimal adalah {max_position}!")
+            
+        # Move category
+        await category.edit(position=position)
+        
+        embed = discord.Embed(
+            title="✅ Category Moved",
+            description=f"Category {category.mention} dipindah ke posisi {position}",
+            color=discord.Color.green()
+        )
+        
+        # Show category order
+        categories = sorted(ctx.guild.categories, key=lambda c: c.position)
+        order = "\n".join([f"`{i}.` {c.name}" for i, c in enumerate(categories)])
+        embed.add_field(
+            name="Current Order",
+            value=order,
+            inline=False
+        )
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(f"Error: {str(e)}")
+
+@bot.command(name='catlist')
+@commands.has_permissions(administrator=True)
+async def list_categories(ctx):
+    """Liat urutan category"""
+    try:
+        embed = discord.Embed(
+            title="📋 Category List",
+            description="Urutan category dari atas ke bawah:",
+            color=discord.Color.blue()
+        )
+        
+        # Get sorted categories
+        categories = sorted(ctx.guild.categories, key=lambda c: c.position)
+        
+        # List categories with their channels
+        for i, category in enumerate(categories):
+            # Get channels in category
+            text_channels = len([c for c in category.text_channels])
+            voice_channels = len([c for c in category.voice_channels])
+            
+            value = f"Text Channels: {text_channels}\nVoice Channels: {voice_channels}"
+            embed.add_field(
+                name=f"{i}. {category.name}",
+                value=value,
+                inline=True
+            )
+            
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(f"Error: {str(e)}")
+
+@bot.command(name='swapcats')
+@commands.has_permissions(administrator=True)
+async def swap_categories(ctx, cat1: discord.CategoryChannel, cat2: discord.CategoryChannel):
+    """Tuker posisi 2 category
+    Contoh: !swapcats "GAMING" "CHAT" """
+    try:
+        # Get positions
+        pos1 = cat1.position
+        pos2 = cat2.position
+        
+        # Swap positions
+        await cat1.edit(position=pos2)
+        await cat2.edit(position=pos1)
+        
+        embed = discord.Embed(
+            title="✅ Categories Swapped",
+            description=f"Posisi category dituker:",
+            color=discord.Color.green()
+        )
+        
+        embed.add_field(
+            name=cat1.name,
+            value=f"Moved to position {pos2}",
+            inline=True
+        )
+        embed.add_field(
+            name=cat2.name,
+            value=f"Moved to position {pos1}",
+            inline=True
+        )
+        
+        # Show new order
+        categories = sorted(ctx.guild.categories, key=lambda c: c.position)
+        order = "\n".join([f"`{i}.` {c.name}" for i, c in enumerate(categories)])
+        embed.add_field(
+            name="New Order",
+            value=order,
+            inline=False
+        )
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(f"Error: {str(e)}")
+
 # Jalanin bot pake token
 bot.run(os.getenv('DISCORD_TOKEN'))
