@@ -230,5 +230,76 @@ async def leave(ctx):
     else:
         await ctx.send("Gua ga di voice channel mana-mana bre!")
 
+@bot.command(name='play')
+async def play(ctx, *, url):
+    if ctx.author.voice is None:
+        await ctx.send("Lu join voice channel dulu dong bro!")
+        return
+        
+    if ctx.voice_client is None:
+        await ctx.invoke(bot.get_command('join'))
+    
+    # Setup youtube_dl
+    YDL_OPTIONS = {'format': 'bestaudio/best'}
+    FFMPEG_OPTIONS = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 'options': '-vn'}
+    
+    with YoutubeDL(YDL_OPTIONS) as ydl:
+        try:
+            info = ydl.extract_info(url, download=False)
+            URL = info['formats'][0]['url']
+            title = info['title']
+            
+            # Tambahin ke queue kalo udah ada yang main
+            if ctx.voice_client.is_playing():
+                if ctx.guild.id not in music_queue:
+                    music_queue[ctx.guild.id] = []
+                music_queue[ctx.guild.id].append({'url': URL, 'title': title})
+                await ctx.send(f'Added to queue: {title}')
+                return
+            
+            # Main musiknya
+            ctx.voice_client.play(FFmpegPCMAudio(URL, **FFMPEG_OPTIONS))
+            current_song[ctx.guild.id] = title
+            await ctx.send(f'Now playing: {title} 🎶')
+            
+        except Exception as e:
+            await ctx.send(f'Waduh error bre: {str(e)}')
+
+@bot.command(name='skip')
+async def skip(ctx):
+    if ctx.voice_client is None:
+        await ctx.send("Gua ga lagi main musik bre!")
+        return
+    
+    if not ctx.voice_client.is_playing():
+        await ctx.send("Ga ada yang lagi main bre!")
+        return
+        
+    ctx.voice_client.stop()
+    await ctx.send("Skipped! ⏭️")
+    
+    # Main lagu selanjutnya dari queue
+    if ctx.guild.id in music_queue and music_queue[ctx.guild.id]:
+        next_song = music_queue[ctx.guild.id].pop(0)
+        FFMPEG_OPTIONS = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 'options': '-vn'}
+        ctx.voice_client.play(FFmpegPCMAudio(next_song['url'], **FFMPEG_OPTIONS))
+        current_song[ctx.guild.id] = next_song['title']
+        await ctx.send(f'Now playing: {next_song["title"]} 🎶')
+
+@bot.command(name='queue')
+async def queue(ctx):
+    if ctx.guild.id not in music_queue or not music_queue[ctx.guild.id]:
+        await ctx.send("Queue kosong bre!")
+        return
+        
+    queue_list = "🎵 Queue:\n"
+    for i, song in enumerate(music_queue[ctx.guild.id], 1):
+        queue_list += f"{i}. {song['title']}\n"
+    
+    if ctx.guild.id in current_song:
+        queue_list = f"🎵 Now Playing: {current_song[ctx.guild.id]}\n\n" + queue_list
+        
+    await ctx.send(queue_list)
+
 # Jalanin bot pake token
 bot.run(os.getenv('DISCORD_TOKEN'))
