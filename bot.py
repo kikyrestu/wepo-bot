@@ -2,9 +2,8 @@ import os
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
-import youtube_dl
+import yt_dlp as youtube_dl
 from discord import FFmpegPCMAudio
-from youtube_dl import YoutubeDL
 
 # Load token dari file .env
 load_dotenv()
@@ -21,7 +20,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # Simpan tiket yang aktif
 active_tickets = {}
 
-# Tambahin variabel baru untuk welcome message
+# Tambahin variabel buat welcome message
 welcome_messages = {}
 welcome_channels = {}
 
@@ -239,14 +238,24 @@ async def play(ctx, *, url):
     if ctx.voice_client is None:
         await ctx.invoke(bot.get_command('join'))
     
-    # Setup youtube_dl
-    YDL_OPTIONS = {'format': 'bestaudio/best'}
+    # Setup yt-dlp
+    YDL_OPTIONS = {
+        'format': 'bestaudio/best',
+        'noplaylist': True,
+        'nocheckcertificate': True,
+        'ignoreerrors': False,
+        'logtostderr': False,
+        'quiet': True,
+        'no_warnings': True,
+        'default_search': 'auto',
+        'source_address': '0.0.0.0'
+    }
     FFMPEG_OPTIONS = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 'options': '-vn'}
     
-    with YoutubeDL(YDL_OPTIONS) as ydl:
+    with youtube_dl.YoutubeDL(YDL_OPTIONS) as ydl:
         try:
             info = ydl.extract_info(url, download=False)
-            URL = info['formats'][0]['url']
+            URL = info['url']
             title = info['title']
             
             # Tambahin ke queue kalo udah ada yang main
