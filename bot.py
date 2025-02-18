@@ -9,6 +9,12 @@ import asyncio
 import socket
 import struct
 from discord.ui import Button, View
+import mysql.connector
+from mysql.connector import Error
+from contextlib import contextmanager
+import secrets
+import hashlib
+from typing import Optional
 
 # Load token dari file .env
 load_dotenv()
@@ -108,74 +114,111 @@ filter_words = {}  # {guild_id: {'words': [], 'links': bool, 'invites': bool}}
 filter_channels = {}  # {guild_id: [channel_ids]}
 filter_bypass = {}  # {guild_id: [role_ids]}
 
-class SAMPQuery:
-    def __init__(self, ip, port=7777):
-        self.ip = ip
-        self.port = port
-        
-    def get_server_info(self):
+# Simpan dev sessions di memory
+dev_sessions = {}  # {user_id: {'session_id': str, 'expires_at': timestamp}}
+
+def create_db_connection():
+    """Buat koneksi ke database"""
+    try:
+        connection = mysql.connector.connect(
+            host=os.getenv('DB_HOST'),
+            user=os.getenv('DB_USER'),
+            password=os.getenv('DB_PASSWORD'),
+            database=os.getenv('DB_NAME')
+        )
+        return connection
+    except Error as e:
+        print(f"Error connecting to MySQL Database: {e}")
+        return None
+
+def create_tables():
+    """Buat tabel yang dibutuhkan"""
+    connection = create_db_connection()
+    if connection:
         try:
-            # Bikin socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(2.0)
+            cursor = connection.cursor()
             
-            # SAMP query packet
-            query = b'SAMP'
-            query += struct.pack('!BBBB', *map(int, self.ip.split('.')))
-            query += struct.pack('!H', self.port)
-            query += b'i'
+            # Tabel untuk welcome messages
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS welcome_messages (
+                    guild_id BIGINT PRIMARY KEY,
+                    message TEXT,
+                    channel_id BIGINT
+                )
+            """)
             
-            # Kirim query
-            sock.sendto(query, (self.ip, self.port))
+            # Tabel untuk music queue
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS music_queue (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    guild_id BIGINT,
+                    url TEXT,
+                    title VARCHAR(255),
+                    duration VARCHAR(10),
+                    position INT
+                )
+            """)
             
-            # Terima response
-            response = sock.recvfrom(4096)[0]
+            # Tabel untuk roles
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS server_roles (
+                    guild_id BIGINT,
+                    role_type VARCHAR(50),
+                    role_id BIGINT,
+                    PRIMARY KEY (guild_id, role_type)
+                )
+            """)
             
-            if response:
-                # Parse response
-                offset = 11
-                
-                password = bool(response[offset])
-                offset += 1
-                
-                players = struct.unpack('!H', response[offset:offset+2])[0]
-                offset += 2
-                
-                maxplayers = struct.unpack('!H', response[offset:offset+2])[0]
-                offset += 2
-                
-                hostname_len = struct.unpack('!I', response[offset:offset+4])[0]
-                offset += 4
-                hostname = response[offset:offset+hostname_len].decode('latin-1')
-                offset += hostname_len
-                
-                gamemode_len = struct.unpack('!I', response[offset:offset+4])[0]
-                offset += 4
-                gamemode = response[offset:offset+gamemode_len].decode('latin-1')
-                offset += gamemode_len
-                
-                language_len = struct.unpack('!I', response[offset:offset+4])[0]
-                offset += 4
-                language = response[offset:offset+language_len].decode('latin-1')
-                
-                return {
-                    'password': password,
-                    'players': players,
-                    'maxplayers': maxplayers,
-                    'hostname': hostname,
-                    'gamemode': gamemode,
-                    'language': language
-                }
-                
-        except Exception as e:
-            print(f"Error querying SAMP server: {e}")
-            return None
+            # Tabel untuk temporary roles
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS temp_roles (
+                    user_id BIGINT,
+                    role_id BIGINT,
+                    guild_id BIGINT,
+                    expiry TIMESTAMP,
+                    PRIMARY KEY (user_id, role_id)
+                )
+            """)
+            
+            # Tabel untuk filter words
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS filter_words (
+                    guild_id BIGINT,
+                    word VARCHAR(255),
+                    PRIMARY KEY (guild_id, word)
+                )
+            """)
+            
+            connection.commit()
+            print("Database tables created successfully")
+            
+        except Error as e:
+            print(f"Error creating tables: {e}")
         finally:
-            sock.close()
+            cursor.close()
+            connection.close()
+
+@contextmanager
+def get_db_cursor():
+    """Context manager untuk database cursor"""
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            yield cursor
+            connection.commit()
+        except Error as e:
+            print(f"Database error: {e}")
+            connection.rollback()
+            raise
+        finally:
+            cursor.close()
+            connection.close()
 
 @bot.event
 async def on_ready():
     print(f'Waduh! {bot.user} udah online nih!')
+    create_tables()  # Setup database tables
     
     @bot.event
     async def on_command_error(ctx, error):
@@ -295,11 +338,32 @@ async def ping(ctx):
 @bot.command(name='sw')
 @commands.has_permissions(administrator=True)
 async def set_welcome(ctx, *, message):
-    """Set welcome message. Cara pake:
-    !sw Halo {member}! Welcome ke server!
-    Note: {member} bakal ke-replace jadi mention member baru"""
-    welcome_messages[ctx.guild.id] = message
-    await ctx.send(f'Sip bre! Welcome message udah diset:\n{message}')
+    """Set welcome message"""
+    try:
+        connection = create_db_connection()
+        if not connection:
+            return await ctx.send("❌ Tidak bisa connect ke database!")
+            
+        cursor = connection.cursor()
+        
+        # Simpan atau update welcome message
+        sql = """INSERT INTO welcome_messages (guild_id, message)
+                 VALUES (%s, %s)
+                 ON DUPLICATE KEY UPDATE message = %s"""
+        values = (ctx.guild.id, message, message)
+        
+        cursor.execute(sql, values)
+        connection.commit()
+        
+        await ctx.send(f'Sip bre! Welcome message udah diset:\n{message}')
+        
+    except Error as e:
+        await ctx.send(f"Error: {str(e)}")
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+        if 'connection' in locals():
+            connection.close()
 
 @bot.command(name='swc')
 @commands.has_permissions(administrator=True)
@@ -1364,35 +1428,20 @@ async def add_filter(ctx, *, words):
     """Tambahin kata/frasa yang mau difilter
     Contoh: !addfilter promosi jual beli dagang"""
     try:
-        guild_id = ctx.guild.id
-        
-        # Setup filter buat server ini
-        if guild_id not in filter_words:
-            filter_words[guild_id] = {
-                'words': [],
-                'links': False,
-                'invites': False
-            }
-        
-        # Tambahin kata ke filter
-        added_words = []
-        for word in words.lower().split():
-            if word not in filter_words[guild_id]['words']:
-                filter_words[guild_id]['words'].append(word)
+        with get_db_cursor() as cursor:
+            added_words = []
+            for word in words.lower().split():
+                sql = """INSERT IGNORE INTO filter_words (guild_id, word)
+                         VALUES (%s, %s)"""
+                cursor.execute(sql, (ctx.guild.id, word))
                 added_words.append(word)
-        
-        if added_words:
-            embed = discord.Embed(
-                title="✅ Filter Updated",
-                description="Kata yang ditambahin ke filter:",
-                color=discord.Color.green()
-            )
-            embed.add_field(name="Words", value="`" + "`, `".join(added_words) + "`")
-            await ctx.send(embed=embed)
-        else:
-            await ctx.send("❌ Kata-kata itu udah ada di filter!")
             
-    except Exception as e:
+            if added_words:
+                await ctx.send(f"✅ Kata yang ditambahkan: `{', '.join(added_words)}`")
+            else:
+                await ctx.send("❌ Tidak ada kata yang ditambahkan!")
+                
+    except Error as e:
         await ctx.send(f"Error: {str(e)}")
 
 @bot.command(name='removefilter')
@@ -1995,3 +2044,319 @@ async def help_command(ctx):
 
 # Jalanin bot pake token
 bot.run(os.getenv('DISCORD_TOKEN'))
+
+@bot.event
+async def on_member_join(member):
+    """Handle member join event"""
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            
+            # Get welcome message
+            cursor.execute("""
+                SELECT message, channel_id 
+                FROM welcome_messages 
+                WHERE guild_id = %s
+            """, (member.guild.id,))
+            
+            result = cursor.fetchone()
+            if result:
+                message, channel_id = result
+                
+                if channel_id:
+                    channel = member.guild.get_channel(channel_id)
+                    if channel:
+                        welcome_msg = message.replace('{member}', member.mention)
+                        await channel.send(welcome_msg)
+                        
+        except Error as e:
+            print(f"Error handling member join: {e}")
+        finally:
+            cursor.close()
+            connection.close()
+
+def hash_token(token: str) -> str:
+    """Hash token dengan SHA-256"""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+def check_dev_session(user_id: int) -> bool:
+    """Cek apakah dev session masih valid"""
+    if user_id not in dev_sessions:
+        return False
+        
+    if datetime.now().timestamp() > dev_sessions[user_id]['expires_at']:
+        del dev_sessions[user_id]
+        return False
+        
+    return True
+
+@bot.command(name='devlogin')
+async def dev_login(ctx):
+    """Developer login - DM only"""
+    # Cek apakah dari DM
+    if not isinstance(ctx.channel, discord.DMChannel):
+        await ctx.message.delete()
+        return await ctx.send("❌ Command ini hanya bisa dipakai di DM!", delete_after=5)
+        
+    try:
+        with get_db_cursor() as cursor:
+            # Cek apakah user adalah developer
+            cursor.execute("""
+                SELECT token FROM dev_credentials 
+                WHERE user_id = %s AND is_active = TRUE
+            """, (ctx.author.id,))
+            result = cursor.fetchone()
+            
+            if not result:
+                return
+                
+            # Cek apakah sudah login
+            if check_dev_session(ctx.author.id):
+                return await ctx.send("✅ Anda sudah login sebagai developer!")
+                
+            # Minta token
+            await ctx.send("🔐 Masukkan developer token:")
+            
+            try:
+                msg = await bot.wait_for(
+                    'message',
+                    timeout=30.0,
+                    check=lambda m: m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+                )
+                
+                # Verify token
+                if hash_token(msg.content) == result[0]:
+                    # Generate session
+                    session_id = secrets.token_urlsafe(32)
+                    expires_at = datetime.now() + timedelta(hours=1)
+                    
+                    # Simpan session ke database
+                    cursor.execute("""
+                        INSERT INTO dev_sessions (session_id, user_id, expires_at)
+                        VALUES (%s, %s, %s)
+                    """, (session_id, ctx.author.id, expires_at))
+                    
+                    # Update last login
+                    cursor.execute("""
+                        UPDATE dev_credentials 
+                        SET last_login = CURRENT_TIMESTAMP 
+                        WHERE user_id = %s
+                    """, (ctx.author.id,))
+                    
+                    # Simpan di memory
+                    dev_sessions[ctx.author.id] = {
+                        'session_id': session_id,
+                        'expires_at': expires_at.timestamp()
+                    }
+                    
+                    # Log login
+                    cursor.execute("""
+                        INSERT INTO dev_logs (user_id, action, details)
+                        VALUES (%s, %s, %s)
+                    """, (ctx.author.id, 'LOGIN', f'Login from {ctx.author}'))
+                    
+                    embed = discord.Embed(
+                        title="✅ Login Berhasil",
+                        description="Selamat datang kembali, Developer!",
+                        color=discord.Color.green()
+                    )
+                    embed.add_field(
+                        name="Session Info",
+                        value=f"Expires: <t:{int(expires_at.timestamp())}:R>",
+                        inline=False
+                    )
+                    embed.add_field(
+                        name="Commands",
+                        value="`!dev` - Open developer panel\n`!devlogout` - Logout",
+                        inline=False
+                    )
+                    
+                    await ctx.send(embed=embed)
+                    
+                else:
+                    # Log failed attempt
+                    cursor.execute("""
+                        INSERT INTO dev_logs (user_id, action, details)
+                        VALUES (%s, %s, %s)
+                    """, (ctx.author.id, 'FAILED_LOGIN', f'Invalid token attempt from {ctx.author}'))
+                    
+                    await ctx.send("❌ Token salah!")
+                
+                # Hapus pesan yang berisi token
+                await msg.delete()
+                
+            except asyncio.TimeoutError:
+                await ctx.send("❌ Timeout! Coba lagi.")
+                
+    except Error as e:
+        await ctx.send(f"Error: {str(e)}")
+
+@bot.command(name='dev')
+async def dev_panel(ctx):
+    """Developer control panel - DM only"""
+    # Cek apakah dari DM
+    if not isinstance(ctx.channel, discord.DMChannel):
+        return
+        
+    # Cek session
+    if not check_dev_session(ctx.author.id):
+        return await ctx.send("❌ Silakan login dulu dengan `!devlogin`")
+        
+    # Show panel
+    embed = discord.Embed(
+        title="👨‍💻 Developer Control Panel",
+        description="Welcome back, Developer!",
+        color=discord.Color.gold()
+    )
+    
+    # Stats
+    total_servers = len(bot.guilds)
+    total_users = sum(g.member_count for g in bot.guilds)
+    
+    embed.add_field(
+        name="📊 Bot Stats",
+        value=f"Servers: {total_servers}\nUsers: {total_users}",
+        inline=True
+    )
+    
+    # Uptime
+    uptime = datetime.now() - bot.start_time
+    hours = uptime.seconds // 3600
+    minutes = (uptime.seconds % 3600) // 60
+    
+    embed.add_field(
+        name="⏰ Uptime",
+        value=f"{uptime.days}d {hours}h {minutes}m",
+        inline=True
+    )
+    
+    # Control buttons
+    class DevView(View):
+        def __init__(self):
+            super().__init__(timeout=60)
+            
+        @discord.ui.button(label="Broadcast", style=discord.ButtonStyle.green)
+        async def broadcast(self, interaction: discord.Interaction, button: Button):
+            await interaction.response.send_message("Masukkan pesan broadcast:")
+            
+            try:
+                msg = await bot.wait_for(
+                    'message',
+                    timeout=60.0,
+                    check=lambda m: m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+                )
+                
+                with get_db_cursor() as cursor:
+                    # Create broadcast entry
+                    cursor.execute("""
+                        INSERT INTO broadcast_messages (user_id, message, total_servers)
+                        VALUES (%s, %s, %s)
+                    """, (ctx.author.id, msg.content, len(bot.guilds)))
+                    
+                    broadcast_id = cursor.lastrowid
+                    
+                    # Update status
+                    cursor.execute("""
+                        UPDATE broadcast_messages 
+                        SET status = 'sending' 
+                        WHERE broadcast_id = %s
+                    """, (broadcast_id,))
+                
+                # Broadcast ke semua server
+                success = 0
+                failed = 0
+                
+                for guild in bot.guilds:
+                    try:
+                        channel = next((ch for ch in guild.text_channels if ch.permissions_for(guild.me).send_messages), None)
+                        if channel:
+                            await channel.send(msg.content)
+                            success += 1
+                    except:
+                        failed += 1
+                        continue
+                
+                # Update hasil
+                with get_db_cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE broadcast_messages 
+                        SET status = 'completed',
+                            successful_sends = %s,
+                            failed_sends = %s
+                        WHERE broadcast_id = %s
+                    """, (success, failed, broadcast_id))
+                
+                await ctx.send(f"✅ Broadcast selesai!\nSuccess: {success}\nFailed: {failed}")
+                
+            except asyncio.TimeoutError:
+                await ctx.send("❌ Timeout! Coba lagi.")
+                
+        @discord.ui.button(label="Server List", style=discord.ButtonStyle.blurple)
+        async def server_list(self, interaction: discord.Interaction, button: Button):
+            servers = []
+            for guild in bot.guilds:
+                servers.append(f"• {guild.name}\n  ID: {guild.id}\n  Members: {guild.member_count}")
+            
+            # Split jika terlalu panjang
+            chunks = [servers[i:i+10] for i in range(0, len(servers), 10)]
+            
+            for i, chunk in enumerate(chunks):
+                embed = discord.Embed(
+                    title=f"🌐 Server List (Page {i+1}/{len(chunks)})",
+                    description="\n".join(chunk),
+                    color=discord.Color.blue()
+                )
+                await interaction.response.send_message(embed=embed)
+                
+        @discord.ui.button(label="View Logs", style=discord.ButtonStyle.gray)
+        async def view_logs(self, interaction: discord.Interaction, button: Button):
+            with get_db_cursor() as cursor:
+                cursor.execute("""
+                    SELECT action, details, executed_at
+                    FROM dev_logs
+                    WHERE user_id = %s
+                    ORDER BY executed_at DESC
+                    LIMIT 10
+                """, (ctx.author.id,))
+                
+                logs = cursor.fetchall()
+                
+                if logs:
+                    embed = discord.Embed(
+                        title="📝 Recent Logs",
+                        color=discord.Color.blue()
+                    )
+                    
+                    for log in logs:
+                        embed.add_field(
+                            name=f"{log[0]} - {log[2]}",
+                            value=log[1],
+                            inline=False
+                        )
+                else:
+                    embed = discord.Embed(
+                        title="📝 Logs",
+                        description="No logs found",
+                        color=discord.Color.red()
+                    )
+                    
+                await interaction.response.send_message(embed=embed)
+                
+        @discord.ui.button(label="Logout", style=discord.ButtonStyle.red)
+        async def logout(self, interaction: discord.Interaction, button: Button):
+            with get_db_cursor() as cursor:
+                cursor.execute("""
+                    DELETE FROM dev_sessions 
+                    WHERE user_id = %s
+                """, (ctx.author.id,))
+                
+                cursor.execute("""
+                    INSERT INTO dev_logs (user_id, action, details)
+                    VALUES (%s, %s, %s)
+                """, (ctx.author.id, 'LOGOUT', f'Logout from panel'))
+                
+            del dev_sessions[ctx.author.id]
+            await interaction.response.send_message("👋 Logged out!")
+            
+    await ctx.send(embed=embed, view=DevView())
