@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import asyncio
 import socket
 import struct
-from discord.ui import Button, ActionRow
+from discord.ui import Button, View
 
 # Load token dari file .env
 load_dotenv()
@@ -1969,42 +1969,38 @@ async def help_command(ctx):
         # Kirim message dengan buttons
         current_page = 0
         
-        # Add navigation buttons
-        buttons = [
-            Button(style=ButtonStyle.green, label="◀️", custom_id="prev"),
-            Button(style=ButtonStyle.red, label="❌", custom_id="close"),
-            Button(style=ButtonStyle.green, label="▶️", custom_id="next")
-        ]
-        
-        action_row = ActionRow(*buttons)
-        
-        # Send initial embed
-        message = await ctx.send(embed=pages[current_page], components=[action_row])
-        
-        # Handle button interactions
-        while True:
-            try:
-                interaction = await bot.wait_for(
-                    "button_click",
-                    check=lambda i: i.message.id == message.id,
-                    timeout=60.0
-                )
+        # Bikin class untuk View
+        class HelpView(View):
+            def __init__(self):
+                super().__init__(timeout=60.0)
                 
-                if interaction.custom_id == "prev":
-                    current_page = (current_page - 1) % len(pages)
-                elif interaction.custom_id == "next":
-                    current_page = (current_page + 1) % len(pages)
-                elif interaction.custom_id == "close":
-                    await message.delete()
-                    break
-                    
-                await message.edit(embed=pages[current_page])
-                await interaction.respond(type=6)
+            @discord.ui.button(label="◀️", style=discord.ButtonStyle.green, custom_id="prev")
+            async def prev_button(self, interaction: discord.Interaction, button: Button):
+                nonlocal current_page
+                current_page = (current_page - 1) % len(pages)
+                await interaction.response.edit_message(embed=pages[current_page])
                 
-            except TimeoutError:
-                # Remove buttons after timeout
-                await message.edit(components=[])
-                break
+            @discord.ui.button(label="❌", style=discord.ButtonStyle.red, custom_id="close")
+            async def close_button(self, interaction: discord.Interaction, button: Button):
+                await interaction.message.delete()
+                
+            @discord.ui.button(label="▶️", style=discord.ButtonStyle.green, custom_id="next")
+            async def next_button(self, interaction: discord.Interaction, button: Button):
+                nonlocal current_page
+                current_page = (current_page + 1) % len(pages)
+                await interaction.response.edit_message(embed=pages[current_page])
+                
+            async def on_timeout(self):
+                # Remove buttons when timeout
+                try:
+                    await self.message.edit(view=None)
+                except:
+                    pass
+
+        # Create and send view
+        view = HelpView()
+        message = await ctx.send(embed=pages[current_page], view=view)
+        view.message = message
                 
     except Exception as e:
         await ctx.send(f"Error: {str(e)}")
