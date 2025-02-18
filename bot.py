@@ -34,6 +34,7 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 async def on_ready():
     print(f'Waduh! {bot.user} udah online nih!')
     create_tables()  # Setup database tables
+    check_trial_reminders.start()  # Start background task
 
 # Simpan tiket yang aktif
 active_tickets = {}
@@ -327,9 +328,6 @@ async def check_trial_reminders():
                     
     except Error as e:
         print(f"Error checking reminders: {e}")
-
-# Start background task
-check_trial_reminders.start()
 
 # Setup kategori dan role handler
 async def setup_ticket_system(guild):
