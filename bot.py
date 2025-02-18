@@ -1854,71 +1854,62 @@ async def swap_categories(ctx, cat1: discord.CategoryChannel, cat2: discord.Cate
     except Exception as e:
         await ctx.send(f"Error: {str(e)}")
 
-@bot.command(name='menu')
-async def help_menu(ctx):
-    """Tampilkan daftar perintah bot"""
+@bot.command(name='help')
+async def help_command(ctx):
+    """Shows this message"""
     try:
         # Bikin embed pages
         pages = []
         
-        # Page 1: Moderator Commands
-        mod_embed = discord.Embed(
-            title="🛡️ Moderator Commands",
-            description="Perintah khusus moderator/admin server",
-            color=discord.Color.blue()
+        # Page 1: Admin Commands
+        admin_embed = discord.Embed(
+            title="👑 Command Admin/Mod",
+            description="Command khusus buat lu yang jadi admin/mod server",
+            color=discord.Color.gold()
         )
-        mod_embed.set_thumbnail(url="https://i.imgur.com/XwVLN6G.gif") # Ganti URL dengan GIF moderator
+        admin_embed.set_thumbnail(url="https://i.imgur.com/XwVLN6G.gif")
         
-        mod_embed.add_field(
-            name="👮 Member Management",
+        admin_embed.add_field(
+            name="🛠️ Manage Server",
             value="""
-            `!ban @user [reason]` - Ban member
+            `!cat` - Bikin category baru
+            `!movecat` - Pindahin posisi category
+            `!catlist` - Liat urutan category
+            `!mv` - Pindahin channel ke category lain
+            `!del` - Hapus channel
+            `!lock` - Kunci channel
+            """,
+            inline=False
+        )
+        
+        admin_embed.add_field(
+            name="👮 Manage Member",
+            value="""
+            `!kick @user` - Tendang member
+            `!ban @user` - Ban member
             `!unban User#1234` - Unban member
-            `!kick @user [reason]` - Kick member
-            `!timeout @user [minutes] [reason]` - Timeout member
-            `!untimeout @user` - Remove timeout
+            `!createprivatechannel` - Bikin channel private buat role tertentu
             """,
             inline=False
         )
         
-        mod_embed.add_field(
-            name="🔧 Server Settings",
-            value="""
-            `!setserver [ip] [port]` - Set SAMP server
-            `!resetserver` - Reset server settings
-            `!movecat [category] [position]` - Pindah category
-            `!swapcats [cat1] [cat2]` - Tuker posisi category
-            """,
-            inline=False
-        )
-        
-        pages.append(mod_embed)
+        pages.append(admin_embed)
         
         # Page 2: Filter Commands
         filter_embed = discord.Embed(
-            title="⚔️ Filter System",
-            description="Sistem filter chat & konten",
+            title="🛡️ Filter System",
+            description="Biar server lu bebas dari spam & konten sampah",
             color=discord.Color.green()
         )
-        filter_embed.set_thumbnail(url="https://i.imgur.com/qH3S0Ym.gif") # Ganti URL dengan GIF filter
+        filter_embed.set_thumbnail(url="https://i.imgur.com/qH3S0Ym.gif")
         
         filter_embed.add_field(
-            name="📝 Word Filter",
+            name="📝 Setup Filter",
             value="""
-            `!addfilter [kata1] [kata2]` - Tambah kata ke filter
-            `!removefilter [kata1] [kata2]` - Hapus kata dari filter
-            `!filters` - Lihat semua filter aktif
-            """,
-            inline=False
-        )
-        
-        filter_embed.add_field(
-            name="⚙️ Filter Settings",
-            value="""
-            `!togglelink` - Toggle filter semua link
-            `!toggleinvite` - Toggle filter invite Discord
+            `!addfilter [kata]` - Tambahin kata ke filter
+            `!filters` - Liat semua filter yang aktif
             `!filterchannel #channel` - Set channel yang difilter
-            `!bypassrole @role` - Set role yang bisa bypass
+            `!bypassrole @role` - Kasih role yang bisa bypass
             """,
             inline=False
         )
@@ -1928,76 +1919,73 @@ async def help_menu(ctx):
         # Page 3: SAMP Commands
         samp_embed = discord.Embed(
             title="🎮 SAMP Commands",
-            description="Monitor server SA:MP",
-            color=discord.Color.orange()
+            description="Buat lu yang main SAMP",
+            color=discord.Color.blue()
         )
-        samp_embed.set_thumbnail(url="https://i.imgur.com/dQw4w9W.gif") # Ganti URL dengan GIF SAMP
+        samp_embed.set_thumbnail(url="https://i.imgur.com/dQw4w9W.gif")
         
         samp_embed.add_field(
             name="📊 Server Status",
             value="""
-            `!players` - Cek player online
-            `!serverinfo` - Lihat info server
-            `!sampauto #channel` - Set auto-monitor
+            `!players` - Cek berapa player online
+            `!serverinfo` - Info lengkap server
+            `!sampauto #channel` - Auto update status server
             """,
             inline=False
         )
         
         pages.append(samp_embed)
         
-        # Page 4: General Commands
-        general_embed = discord.Embed(
-            title="💫 General Commands",
-            description="Perintah umum untuk semua member",
+        # Page 4: Utility Commands
+        util_embed = discord.Embed(
+            title="🔧 Command Utility",
+            description="Command umum yang bisa dipake semua member",
             color=discord.Color.purple()
         )
-        general_embed.set_thumbnail(url="https://i.imgur.com/7K1x0dN.gif") # Ganti URL dengan GIF general
+        util_embed.set_thumbnail(url="https://i.imgur.com/7K1x0dN.gif")
         
-        general_embed.add_field(
+        util_embed.add_field(
             name="ℹ️ Info Commands",
             value="""
-            `!help` - Tampilkan menu ini
-            `!ping` - Cek latency bot
-            `!serverinfo` - Info server Discord
-            `!userinfo @user` - Info user
+            `!help` - Liat command yang ada
+            `!ping` - Cek bot delay
+            `!checkperm` - Cek permission lu
+            `!listroles` - Liat role yang ada
             """,
             inline=False
         )
         
-        pages.append(general_embed)
+        pages.append(util_embed)
         
-        # Kirim message dengan buttons
+        # Navigation
         current_page = 0
         
-        # Bikin class untuk View
         class HelpView(View):
             def __init__(self):
                 super().__init__(timeout=60.0)
                 
-            @discord.ui.button(label="◀️", style=discord.ButtonStyle.green, custom_id="prev")
+            @discord.ui.button(label="◀️", style=discord.ButtonStyle.green)
             async def prev_button(self, interaction: discord.Interaction, button: Button):
                 nonlocal current_page
                 current_page = (current_page - 1) % len(pages)
                 await interaction.response.edit_message(embed=pages[current_page])
                 
-            @discord.ui.button(label="❌", style=discord.ButtonStyle.red, custom_id="close")
+            @discord.ui.button(label="❌", style=discord.ButtonStyle.red)
             async def close_button(self, interaction: discord.Interaction, button: Button):
                 await interaction.message.delete()
                 
-            @discord.ui.button(label="▶️", style=discord.ButtonStyle.green, custom_id="next")
+            @discord.ui.button(label="▶️", style=discord.ButtonStyle.green)
             async def next_button(self, interaction: discord.Interaction, button: Button):
                 nonlocal current_page
                 current_page = (current_page + 1) % len(pages)
                 await interaction.response.edit_message(embed=pages[current_page])
                 
             async def on_timeout(self):
-                # Remove buttons when timeout
                 try:
                     await self.message.edit(view=None)
                 except:
                     pass
 
-        # Create and send view
         view = HelpView()
         message = await ctx.send(embed=pages[current_page], view=view)
         view.message = message
