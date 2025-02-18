@@ -2148,7 +2148,8 @@ async def dev_login(ctx):
     """Developer login - DM only"""
     # Cek apakah dari DM
     if not isinstance(ctx.channel, discord.DMChannel):
-        await ctx.message.delete()
+        if ctx.message:
+            await ctx.message.delete()
         return await ctx.send("❌ Command ini hanya bisa dipakai di DM!", delete_after=5)
         
     try:
@@ -2161,11 +2162,11 @@ async def dev_login(ctx):
             result = cursor.fetchone()
             
             if not result:
-                return
+                return await ctx.send("❌ Lu bukan developer!")
                 
             # Cek apakah sudah login
             if check_dev_session(ctx.author.id):
-                return await ctx.send("✅ Anda sudah login sebagai developer!")
+                return await ctx.send("✅ Lu udah login sebagai developer!")
                 
             # Minta token
             await ctx.send("🔐 Masukkan developer token:")
@@ -2245,65 +2246,13 @@ async def dev_login(ctx):
         await ctx.send(f"Error: {str(e)}")
 
 @bot.command(name='dev')
-async def dev_command(ctx):
-    """Developer commands"""
-    if not isinstance(ctx.channel, discord.DMChannel):
-        await ctx.message.delete()
-        return await ctx.send("❌ Command ini cuma bisa dipake di DM!", delete_after=5)
-        
-    try:
-        with get_db_cursor() as cursor:
-            # Cek apakah user adalah developer
-            cursor.execute("""
-                SELECT user_id, token 
-                FROM dev_credentials 
-                WHERE user_id = %s AND is_active = TRUE
-            """, (ctx.author.id,))
-            
-            result = cursor.fetchone()
-            if not result:
-                return await ctx.send("❌ Lu bukan developer bre!")
-                
-            # Generate session token
-            session_id = secrets.token_hex(32)
-            expires_at = datetime.now() + timedelta(hours=24)
-            
-            # Simpan session
-            cursor.execute("""
-                INSERT INTO dev_sessions (session_id, user_id, expires_at)
-                VALUES (%s, %s, %s)
-            """, (session_id, ctx.author.id, expires_at))
-            
-            # Update last login
-            cursor.execute("""
-                UPDATE dev_credentials 
-                SET last_login = CURRENT_TIMESTAMP
-                WHERE user_id = %s
-            """, (ctx.author.id,))
-            
-            # Kirim konfirmasi
-            embed = discord.Embed(
-                title="✅ Login Berhasil!",
-                description="Lu udah login sebagai developer",
-                color=discord.Color.green()
-            )
-            embed.add_field(
-                name="Session Expires",
-                value=f"<t:{int(expires_at.timestamp())}:R>",
-                inline=True
-            )
-            
-            await ctx.send(embed=embed)
-            
-    except Error as e:
-        await ctx.send(f"Error: {str(e)}")
-
-@bot.command(name='dev')
 async def dev_panel(ctx):
     """Developer control panel - DM only"""
     # Cek apakah dari DM
     if not isinstance(ctx.channel, discord.DMChannel):
-        return
+        if ctx.message:
+            await ctx.message.delete()
+        return await ctx.send("❌ Command ini cuma bisa dipake di DM!", delete_after=5)
         
     # Cek session
     if not check_dev_session(ctx.author.id):
@@ -2326,17 +2275,6 @@ async def dev_panel(ctx):
         inline=True
     )
     
-    # Uptime
-    uptime = datetime.now() - bot.start_time
-    hours = uptime.seconds // 3600
-    minutes = (uptime.seconds % 3600) // 60
-    
-    embed.add_field(
-        name="⏰ Uptime",
-        value=f"{uptime.days}d {hours}h {minutes}m",
-        inline=True
-    )
-    
     # Control buttons
     class DevView(View):
         def __init__(self):
@@ -2353,22 +2291,6 @@ async def dev_panel(ctx):
                     check=lambda m: m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
                 )
                 
-                with get_db_cursor() as cursor:
-                    # Create broadcast entry
-                    cursor.execute("""
-                        INSERT INTO broadcast_messages (user_id, message, total_servers)
-                        VALUES (%s, %s, %s)
-                    """, (ctx.author.id, msg.content, len(bot.guilds)))
-                    
-                    broadcast_id = cursor.lastrowid
-                    
-                    # Update status
-                    cursor.execute("""
-                        UPDATE broadcast_messages 
-                        SET status = 'sending' 
-                        WHERE broadcast_id = %s
-                    """, (broadcast_id,))
-                
                 # Broadcast ke semua server
                 success = 0
                 failed = 0
@@ -2382,16 +2304,6 @@ async def dev_panel(ctx):
                     except:
                         failed += 1
                         continue
-                
-                # Update hasil
-                with get_db_cursor() as cursor:
-                    cursor.execute("""
-                        UPDATE broadcast_messages 
-                        SET status = 'completed',
-                            successful_sends = %s,
-                            failed_sends = %s
-                        WHERE broadcast_id = %s
-                    """, (success, failed, broadcast_id))
                 
                 await ctx.send(f"✅ Broadcast selesai!\nSuccess: {success}\nFailed: {failed}")
                 
@@ -2415,40 +2327,6 @@ async def dev_panel(ctx):
                 )
                 await interaction.response.send_message(embed=embed)
                 
-        @discord.ui.button(label="View Logs", style=discord.ButtonStyle.gray)
-        async def view_logs(self, interaction: discord.Interaction, button: Button):
-            with get_db_cursor() as cursor:
-                cursor.execute("""
-                    SELECT action, details, executed_at
-                    FROM dev_logs
-                    WHERE user_id = %s
-                    ORDER BY executed_at DESC
-                    LIMIT 10
-                """, (ctx.author.id,))
-                
-                logs = cursor.fetchall()
-                
-                if logs:
-                    embed = discord.Embed(
-                        title="📝 Recent Logs",
-                        color=discord.Color.blue()
-                    )
-                    
-                    for log in logs:
-                        embed.add_field(
-                            name=f"{log[0]} - {log[2]}",
-                            value=log[1],
-                            inline=False
-                        )
-                else:
-                    embed = discord.Embed(
-                        title="📝 Logs",
-                        description="No logs found",
-                        color=discord.Color.red()
-                    )
-                    
-                await interaction.response.send_message(embed=embed)
-                
         @discord.ui.button(label="Logout", style=discord.ButtonStyle.red)
         async def logout(self, interaction: discord.Interaction, button: Button):
             with get_db_cursor() as cursor:
@@ -2462,7 +2340,8 @@ async def dev_panel(ctx):
                     VALUES (%s, %s, %s)
                 """, (ctx.author.id, 'LOGOUT', f'Logout from panel'))
                 
-            del dev_sessions[ctx.author.id]
+            if ctx.author.id in dev_sessions:
+                del dev_sessions[ctx.author.id]
             await interaction.response.send_message("👋 Logged out!")
             
     await ctx.send(embed=embed, view=DevView())
@@ -3301,6 +3180,60 @@ async def dev_login(ctx):
             )
             
             await ctx.send(embed=embed)
+            
+    except Error as e:
+        await ctx.send(f"Error: {str(e)}")
+
+@bot.command(name='adddev')
+@commands.is_owner()  # Hanya owner bot yang bisa pakai
+async def add_developer(ctx, member: discord.Member):
+    """Add new developer"""
+    try:
+        # Generate random token
+        token = secrets.token_urlsafe(16)
+        token_hash = hash_token(token)
+        
+        with get_db_cursor() as cursor:
+            # Check if already developer
+            cursor.execute("""
+                SELECT user_id FROM dev_credentials
+                WHERE user_id = %s
+            """, (member.id,))
+            
+            if cursor.fetchone():
+                return await ctx.send("❌ User ini udah jadi developer!")
+                
+            # Add to database
+            cursor.execute("""
+                INSERT INTO dev_credentials (user_id, username, token)
+                VALUES (%s, %s, %s)
+            """, (member.id, str(member), token_hash))
+            
+            # Send token via DM
+            try:
+                embed = discord.Embed(
+                    title="🔑 Developer Access",
+                    description="Lu udah dijadiin developer! Nih token lu:",
+                    color=discord.Color.green()
+                )
+                embed.add_field(
+                    name="Token",
+                    value=f"```{token}```",
+                    inline=False
+                )
+                embed.add_field(
+                    name="Commands",
+                    value="1. `!devlogin` - Login sebagai developer (DM only)\n2. `!dev` - Buka developer panel",
+                    inline=False
+                )
+                embed.set_footer(text="⚠️ Simpan token ini baik-baik! Jangan kasih tau siapa-siapa!")
+                
+                await member.send(embed=embed)
+                await ctx.send(f"✅ {member.mention} udah dijadiin developer! Token udah dikirim via DM")
+                
+            except:
+                await ctx.send(f"✅ {member.mention} udah dijadiin developer, tapi ga bisa kirim token via DM!")
+                await ctx.send(f"Token: ||{token}|| (delete pesan ini setelah dicatat!)")
             
     except Error as e:
         await ctx.send(f"Error: {str(e)}")
