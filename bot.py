@@ -1619,43 +1619,55 @@ async def set_bypass_role(ctx, role: discord.Role):
 # Event handler buat check messages
 @bot.event
 async def on_message(message):
-    # Skip bot messages
+    # Ignore messages from bot
     if message.author.bot:
         return
+
+    # Jika pesan dari DM, langsung process command
+    if isinstance(message.channel, discord.DMChannel):
+        await bot.process_commands(message)
+        return
         
-    # Check filter
-    guild_id = message.guild.id
-    if guild_id in filter_words:
-        # Check bypass roles
-        if guild_id in filter_bypass:
-            for role_id in filter_bypass[guild_id]:
-                role = message.guild.get_role(role_id)
-                if role and role in message.author.roles:
-                    break
-            else:  # No bypass role found
-                # Check if channel is filtered
-                if guild_id in filter_channels and message.channel.id in filter_channels[guild_id]:
-                    content = message.content.lower()
-                    
-                    # Check filtered words
-                    for word in filter_words[guild_id]['words']:
-                        if word in content:
+    # Untuk pesan di server/guild
+    try:
+        guild_id = message.guild.id
+        
+        # Process filter words
+        if guild_id in filter_words:
+            # Check bypass roles
+            if guild_id in filter_bypass:
+                for role_id in filter_bypass[guild_id]:
+                    role = message.guild.get_role(role_id)
+                    if role and role in message.author.roles:
+                        break
+                else:  # No bypass role found
+                    # Check if channel is filtered
+                    if guild_id in filter_channels and message.channel.id in filter_channels[guild_id]:
+                        content = message.content.lower()
+                        
+                        # Check filtered words
+                        for word in filter_words[guild_id]['words']:
+                            if word in content:
+                                await message.delete()
+                                await message.channel.send(f"⚠️ {message.author.mention} Message lu ada kata yang difilter!", delete_after=5)
+                                return
+                        
+                        # Check links
+                        if filter_words[guild_id].get('links') and ('http://' in content or 'https://' in content):
                             await message.delete()
-                            await message.channel.send(f"⚠️ {message.author.mention} Message lu ada kata yang difilter!", delete_after=5)
+                            await message.channel.send(f"⚠️ {message.author.mention} Dilarang kirim link!", delete_after=5)
                             return
-                    
-                    # Check links
-                    if filter_words[guild_id].get('links') and ('http://' in content or 'https://' in content):
-                        await message.delete()
-                        await message.channel.send(f"⚠️ {message.author.mention} Dilarang kirim link!", delete_after=5)
-                        return
-                    
-                    # Check Discord invites
-                    if filter_words[guild_id].get('invites') and ('discord.gg/' in content or 'discordapp.com/invite/' in content):
-                        await message.delete()
-                        await message.channel.send(f"⚠️ {message.author.mention} Dilarang kirim invite Discord!", delete_after=5)
-                        return
+                        
+                        # Check Discord invites
+                        if filter_words[guild_id].get('invites') and ('discord.gg/' in content or 'discordapp.com/invite/' in content):
+                            await message.delete()
+                            await message.channel.send(f"⚠️ {message.author.mention} Dilarang kirim invite Discord!", delete_after=5)
+                            return
     
+    except Exception as e:
+        print(f"Error in on_message: {e}")
+    
+    # Process commands
     await bot.process_commands(message)
 
 @bot.command(name='samp')
