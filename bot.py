@@ -20,7 +20,7 @@ intents.members = True  # Tambahin ini buat akses member
 intents.guilds = True   # Tambahin ini buat akses guild/server
 
 # Bikin instance bot
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # Simpan tiket yang aktif
 active_tickets = {}
@@ -1854,9 +1854,9 @@ async def swap_categories(ctx, cat1: discord.CategoryChannel, cat2: discord.Cate
     except Exception as e:
         await ctx.send(f"Error: {str(e)}")
 
-@bot.command(name='help')
+@bot.command(name='bothelp')
 async def help_command(ctx):
-    """Shows this message"""
+    """Shows help message"""
     try:
         # Bikin embed pages
         pages = []
