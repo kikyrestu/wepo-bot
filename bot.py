@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import asyncio
 import socket
 import struct
+from discord.ui import Button, ActionRow
 
 # Load token dari file .env
 load_dotenv()
@@ -1850,6 +1851,161 @@ async def swap_categories(ctx, cat1: discord.CategoryChannel, cat2: discord.Cate
         
         await ctx.send(embed=embed)
         
+    except Exception as e:
+        await ctx.send(f"Error: {str(e)}")
+
+@bot.command(name='help')
+async def help_command(ctx):
+    """Tampilkan daftar perintah bot"""
+    try:
+        # Bikin embed pages
+        pages = []
+        
+        # Page 1: Moderator Commands
+        mod_embed = discord.Embed(
+            title="🛡️ Moderator Commands",
+            description="Perintah khusus moderator/admin server",
+            color=discord.Color.blue()
+        )
+        mod_embed.set_thumbnail(url="https://i.imgur.com/XwVLN6G.gif") # Ganti URL dengan GIF moderator
+        
+        mod_embed.add_field(
+            name="👮 Member Management",
+            value="""
+            `!ban @user [reason]` - Ban member
+            `!unban User#1234` - Unban member
+            `!kick @user [reason]` - Kick member
+            `!timeout @user [minutes] [reason]` - Timeout member
+            `!untimeout @user` - Remove timeout
+            """,
+            inline=False
+        )
+        
+        mod_embed.add_field(
+            name="🔧 Server Settings",
+            value="""
+            `!setserver [ip] [port]` - Set SAMP server
+            `!resetserver` - Reset server settings
+            `!movecat [category] [position]` - Pindah category
+            `!swapcats [cat1] [cat2]` - Tuker posisi category
+            """,
+            inline=False
+        )
+        
+        pages.append(mod_embed)
+        
+        # Page 2: Filter Commands
+        filter_embed = discord.Embed(
+            title="⚔️ Filter System",
+            description="Sistem filter chat & konten",
+            color=discord.Color.green()
+        )
+        filter_embed.set_thumbnail(url="https://i.imgur.com/qH3S0Ym.gif") # Ganti URL dengan GIF filter
+        
+        filter_embed.add_field(
+            name="📝 Word Filter",
+            value="""
+            `!addfilter [kata1] [kata2]` - Tambah kata ke filter
+            `!removefilter [kata1] [kata2]` - Hapus kata dari filter
+            `!filters` - Lihat semua filter aktif
+            """,
+            inline=False
+        )
+        
+        filter_embed.add_field(
+            name="⚙️ Filter Settings",
+            value="""
+            `!togglelink` - Toggle filter semua link
+            `!toggleinvite` - Toggle filter invite Discord
+            `!filterchannel #channel` - Set channel yang difilter
+            `!bypassrole @role` - Set role yang bisa bypass
+            """,
+            inline=False
+        )
+        
+        pages.append(filter_embed)
+        
+        # Page 3: SAMP Commands
+        samp_embed = discord.Embed(
+            title="🎮 SAMP Commands",
+            description="Monitor server SA:MP",
+            color=discord.Color.orange()
+        )
+        samp_embed.set_thumbnail(url="https://i.imgur.com/dQw4w9W.gif") # Ganti URL dengan GIF SAMP
+        
+        samp_embed.add_field(
+            name="📊 Server Status",
+            value="""
+            `!players` - Cek player online
+            `!serverinfo` - Lihat info server
+            `!sampauto #channel` - Set auto-monitor
+            """,
+            inline=False
+        )
+        
+        pages.append(samp_embed)
+        
+        # Page 4: General Commands
+        general_embed = discord.Embed(
+            title="💫 General Commands",
+            description="Perintah umum untuk semua member",
+            color=discord.Color.purple()
+        )
+        general_embed.set_thumbnail(url="https://i.imgur.com/7K1x0dN.gif") # Ganti URL dengan GIF general
+        
+        general_embed.add_field(
+            name="ℹ️ Info Commands",
+            value="""
+            `!help` - Tampilkan menu ini
+            `!ping` - Cek latency bot
+            `!serverinfo` - Info server Discord
+            `!userinfo @user` - Info user
+            """,
+            inline=False
+        )
+        
+        pages.append(general_embed)
+        
+        # Kirim message dengan buttons
+        current_page = 0
+        
+        # Add navigation buttons
+        buttons = [
+            Button(style=ButtonStyle.green, label="◀️", custom_id="prev"),
+            Button(style=ButtonStyle.red, label="❌", custom_id="close"),
+            Button(style=ButtonStyle.green, label="▶️", custom_id="next")
+        ]
+        
+        action_row = ActionRow(*buttons)
+        
+        # Send initial embed
+        message = await ctx.send(embed=pages[current_page], components=[action_row])
+        
+        # Handle button interactions
+        while True:
+            try:
+                interaction = await bot.wait_for(
+                    "button_click",
+                    check=lambda i: i.message.id == message.id,
+                    timeout=60.0
+                )
+                
+                if interaction.custom_id == "prev":
+                    current_page = (current_page - 1) % len(pages)
+                elif interaction.custom_id == "next":
+                    current_page = (current_page + 1) % len(pages)
+                elif interaction.custom_id == "close":
+                    await message.delete()
+                    break
+                    
+                await message.edit(embed=pages[current_page])
+                await interaction.respond(type=6)
+                
+            except TimeoutError:
+                # Remove buttons after timeout
+                await message.edit(components=[])
+                break
+                
     except Exception as e:
         await ctx.send(f"Error: {str(e)}")
 
