@@ -278,6 +278,56 @@ async def on_command_error(ctx, error):
     elif isinstance(error, commands.CommandNotFound):
         await ctx.send("❌ Command ga ada bre! Coba cek !help")
 
+@tasks.loop(hours=1)  # Cek setiap jam
+async def check_trial_reminders():
+    """Cek trial premium yang akan berakhir"""
+    try:
+        with get_db_cursor() as cursor:
+            # Get semua trial yang aktif
+            cursor.execute("""
+                SELECT pt.guild_id, pt.end_date
+                FROM premium_trials pt
+                WHERE pt.is_active = TRUE 
+                AND pt.end_date > CURRENT_TIMESTAMP
+            """)
+            
+            for guild_id, end_date in cursor.fetchall():
+                # Hitung sisa hari
+                days_left = (end_date - datetime.now()).days
+                
+                if days_left <= 3:  # Reminder untuk 3 hari terakhir
+                    guild = bot.get_guild(guild_id)
+                    if not guild:
+                        continue
+                        
+                    # Cari channel untuk notifikasi
+                    channel = None
+                    for ch in guild.text_channels:
+                        if ch.permissions_for(guild.me).send_messages:
+                            channel = ch
+                            break
+                            
+                    if channel:
+                        # Kirim reminder
+                        embed = discord.Embed(
+                            title="⚠️ Trial Premium Reminder",
+                            description=f"Trial premium server ini akan berakhir dalam {days_left} hari!",
+                            color=discord.Color.yellow()
+                        )
+                        embed.add_field(
+                            name="Expired",
+                            value=f"<t:{int(end_date.timestamp())}:R>",
+                            inline=True
+                        )
+                        
+                        await channel.send(
+                            content="@everyone" if days_left == 1 else None,
+                            embed=embed
+                        )
+                    
+    except Error as e:
+        print(f"Error checking reminders: {e}")
+
 # Start background task
 check_trial_reminders.start()
 
