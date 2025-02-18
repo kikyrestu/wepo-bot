@@ -3123,67 +3123,6 @@ async def check_trial_reminders():
 async def on_ready():
     check_trial_reminders.start()
 
-@bot.group(name='dev')
-async def dev(ctx):
-    """Developer commands"""
-    if ctx.invoked_subcommand is None:
-        await ctx.send("❌ Command ga valid! Coba `!dev login`")
-
-@dev.command(name='login')
-async def dev_login(ctx):
-    """Login sebagai developer"""
-    # Cek apakah dari DM
-    if not isinstance(ctx.channel, discord.DMChannel):
-        await ctx.message.delete()
-        return await ctx.send("❌ Command ini cuma bisa dipake di DM!", delete_after=5)
-        
-    try:
-        with get_db_cursor() as cursor:
-            # Cek apakah user adalah developer
-            cursor.execute("""
-                SELECT user_id, token 
-                FROM dev_credentials 
-                WHERE user_id = %s AND is_active = TRUE
-            """, (ctx.author.id,))
-            
-            result = cursor.fetchone()
-            if not result:
-                return await ctx.send("❌ Lu bukan developer bre!")
-                
-            # Generate session token
-            session_id = secrets.token_hex(32)
-            expires_at = datetime.now() + timedelta(hours=24)
-            
-            # Simpan session
-            cursor.execute("""
-                INSERT INTO dev_sessions (session_id, user_id, expires_at)
-                VALUES (%s, %s, %s)
-            """, (session_id, ctx.author.id, expires_at))
-            
-            # Update last login
-            cursor.execute("""
-                UPDATE dev_credentials 
-                SET last_login = CURRENT_TIMESTAMP
-                WHERE user_id = %s
-            """, (ctx.author.id,))
-            
-            # Kirim konfirmasi
-            embed = discord.Embed(
-                title="✅ Login Berhasil!",
-                description="Lu udah login sebagai developer",
-                color=discord.Color.green()
-            )
-            embed.add_field(
-                name="Session Expires",
-                value=f"<t:{int(expires_at.timestamp())}:R>",
-                inline=True
-            )
-            
-            await ctx.send(embed=embed)
-            
-    except Error as e:
-        await ctx.send(f"Error: {str(e)}")
-
 @bot.command(name='adddev')
 @commands.is_owner()  # Hanya owner bot yang bisa pakai
 async def add_developer(ctx, member: discord.Member):
