@@ -1666,11 +1666,11 @@ async def set_bypass_role(ctx, role: discord.Role):
 # Event handler buat check messages
 @bot.event
 async def on_message(message):
-    # Ignore messages from bot
+    # Skip bot messages
     if message.author.bot:
         return
 
-    # Jika pesan dari DM, langsung process command
+    # Handle DM messages
     if isinstance(message.channel, discord.DMChannel):
         await bot.process_commands(message)
         return
@@ -2508,11 +2508,11 @@ async def delete_response(ctx, trigger: str):
 # Update on_message event
 @bot.event
 async def on_message(message):
-    # Ignore bot messages
+    # Skip bot messages
     if message.author.bot:
         return
         
-    # Jika pesan dari DM
+    # Handle DM messages
     if isinstance(message.channel, discord.DMChannel):
         await bot.process_commands(message)
         return
@@ -2852,78 +2852,101 @@ async def check_server_trial(ctx):
     if not isinstance(ctx.channel, discord.DMChannel):
         await ctx.message.delete()
         return await ctx.send("❌ Command ini cuma bisa dipake di DM!", delete_after=5)
-
-    class ServerActions(View):
-        def __init__(self):
-            super().__init__(timeout=60)
-
-        @discord.ui.button(label="Set Reminder Channel", style=discord.ButtonStyle.blurple)
-        async def set_reminder(self, interaction: discord.Interaction, button: Button):
-            await interaction.response.send_message(
-                "Ketik ID channel yang mau dipake buat reminder:"
-            )
-            try:
-                msg = await bot.wait_for(
-                    'message',
-                    timeout=30.0,
-                    check=lambda m: m.author == ctx.author and m.channel == ctx.channel
+        
+    try:
+        # Get semua server yang user punya akses admin
+        admin_servers = [
+            guild for guild in bot.guilds 
+            if guild.get_member(ctx.author.id) and guild.get_member(ctx.author.id).guild_permissions.administrator
+        ]
+        
+        if not admin_servers:
+            return await ctx.send("❌ Lu ga punya server yang lu admin bre!")
+            
+        for guild in admin_servers:
+            with get_db_cursor() as cursor:
+                cursor.execute("""
+                    SELECT end_date, is_active 
+                    FROM premium_trials 
+                    WHERE guild_id = %s
+                """, (guild.id,))
+                
+                result = cursor.fetchone()
+                
+                # Bikin embed per server
+                embed = discord.Embed(
+                    title=f"🔍 Status Premium: {guild.name}",
+                    color=discord.Color.blue()
                 )
                 
-                channel_id = int(msg.content)
-                guild = bot.get_guild(current_guild_id)  # Dari context server yang sedang ditampilkan
-                channel = guild.get_channel(channel_id)
+                if guild.icon:
+                    embed.set_thumbnail(url=guild.icon.url)
                 
-                if not channel:
-                    return await ctx.send("❌ Channel tidak ditemukan!")
+                if not result:
+                    embed.description = "```\n❌ SERVER BELUM TRIAL\n```"
+                    embed.add_field(
+                        name="Status",
+                        value="Belum Aktif",
+                        inline=True
+                    )
+                    embed.add_field(
+                        name="Cara Aktivasi",
+                        value="Ketik `!trial` di server",
+                        inline=True
+                    )
+                    embed.color = discord.Color.red()
+                else:
+                    end_date, is_active = result
+                    now = datetime.now()
                     
-                with get_db_cursor() as cursor:
-                    cursor.execute("""
-                        INSERT INTO reminder_settings (guild_id, notify_channel_id)
-                        VALUES (%s, %s)
-                        ON DUPLICATE KEY UPDATE notify_channel_id = %s
-                    """, (guild.id, channel_id, channel_id))
-                    
-                await ctx.send(f"✅ Reminder akan dikirim ke channel {channel.mention}")
+                    if not is_active or now > end_date:
+                        embed.description = "```\n⏰ TRIAL SUDAH BERAKHIR\n```"
+                        embed.add_field(
+                            name="Status",
+                            value="Expired",
+                            inline=True
+                        )
+                        embed.color = discord.Color.red()
+                    else:
+                        # Hitung sisa waktu
+                        delta = end_date - now
+                        days = delta.days
+                        hours = delta.seconds // 3600
+                        minutes = (delta.seconds % 3600) // 60
+                        seconds = delta.seconds % 60
+                        
+                        # Bikin progress bar
+                        total_seconds = 7 * 24 * 60 * 60  # 7 hari dalam detik
+                        elapsed = total_seconds - (delta.days * 24 * 60 * 60 + delta.seconds)
+                        progress = int((elapsed / total_seconds) * 20)  # 20 karakter
+                        
+                        bar = "```\n"
+                        bar += "TRIAL PREMIUM AKTIF!\n\n"
+                        bar += f"[{'=' * (20-progress)}{' ' * progress}] {((total_seconds-elapsed)/total_seconds)*100:.1f}%\n"
+                        bar += f"\n"
+                        bar += f"├─ Hari   : {days:02d}\n"
+                        bar += f"├─ Jam    : {hours:02d}\n"
+                        bar += f"├─ Menit  : {minutes:02d}\n"
+                        bar += f"└─ Detik  : {seconds:02d}\n"
+                        bar += "```"
+                        
+                        embed.description = bar
+                        embed.color = discord.Color.green()
+                        
+                        # Tambah fields
+                        embed.add_field(
+                            name="Expired",
+                            value=f"<t:{int(end_date.timestamp())}:R>",
+                            inline=True
+                        )
                 
-            except asyncio.TimeoutError:
-                await ctx.send("❌ Timeout! Coba lagi.")
-            except ValueError:
-                await ctx.send("❌ ID channel tidak valid!")
-
-        @discord.ui.button(label="Set Reminder Days", style=discord.ButtonStyle.green)
-        async def set_days(self, interaction: discord.Interaction, button: Button):
-            await interaction.response.send_message(
-                "Mau diingetin H-berapa sebelum expired? (1-7 hari)"
-            )
-            try:
-                msg = await bot.wait_for(
-                    'message',
-                    timeout=30.0,
-                    check=lambda m: m.author == ctx.author and m.channel == ctx.channel
-                )
+                # Tambahin footer
+                embed.set_footer(text=f"Server ID: {guild.id}")
                 
-                days = int(msg.content)
-                if not 1 <= days <= 7:
-                    return await ctx.send("❌ Masukkan angka 1-7!")
-                    
-                with get_db_cursor() as cursor:
-                    cursor.execute("""
-                        INSERT INTO reminder_settings (guild_id, notify_days)
-                        VALUES (%s, %s)
-                        ON DUPLICATE KEY UPDATE notify_days = %s
-                    """, (current_guild_id, days, days))
-                    
-                await ctx.send(f"✅ Kamu akan diingatkan {days} hari sebelum trial habis")
+                await ctx.send(embed=embed)
                 
-            except asyncio.TimeoutError:
-                await ctx.send("❌ Timeout! Coba lagi.")
-            except ValueError:
-                await ctx.send("❌ Masukkan angka yang valid!")
-
-    # ... kode !myserver yang sudah ada ...
-    
-    # Tambahkan view ke embed
-    await ctx.send(embed=embed, view=ServerActions())
+    except Error as e:
+        await ctx.send(f"Error: {str(e)}")
 
 @bot.command(name='filterset')
 @commands.has_permissions(administrator=True)
@@ -3166,3 +3189,64 @@ async def check_trial_reminders():
 @bot.event
 async def on_ready():
     check_trial_reminders.start()
+
+@bot.group(name='dev')
+async def dev(ctx):
+    """Developer commands"""
+    if ctx.invoked_subcommand is None:
+        await ctx.send("❌ Command ga valid! Coba `!dev login`")
+
+@dev.command(name='login')
+async def dev_login(ctx):
+    """Login sebagai developer"""
+    # Cek apakah dari DM
+    if not isinstance(ctx.channel, discord.DMChannel):
+        await ctx.message.delete()
+        return await ctx.send("❌ Command ini cuma bisa dipake di DM!", delete_after=5)
+        
+    try:
+        with get_db_cursor() as cursor:
+            # Cek apakah user adalah developer
+            cursor.execute("""
+                SELECT user_id, token 
+                FROM dev_credentials 
+                WHERE user_id = %s AND is_active = TRUE
+            """, (ctx.author.id,))
+            
+            result = cursor.fetchone()
+            if not result:
+                return await ctx.send("❌ Lu bukan developer bre!")
+                
+            # Generate session token
+            session_id = secrets.token_hex(32)
+            expires_at = datetime.now() + timedelta(hours=24)
+            
+            # Simpan session
+            cursor.execute("""
+                INSERT INTO dev_sessions (session_id, user_id, expires_at)
+                VALUES (%s, %s, %s)
+            """, (session_id, ctx.author.id, expires_at))
+            
+            # Update last login
+            cursor.execute("""
+                UPDATE dev_credentials 
+                SET last_login = CURRENT_TIMESTAMP
+                WHERE user_id = %s
+            """, (ctx.author.id,))
+            
+            # Kirim konfirmasi
+            embed = discord.Embed(
+                title="✅ Login Berhasil!",
+                description="Lu udah login sebagai developer",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name="Session Expires",
+                value=f"<t:{int(expires_at.timestamp())}:R>",
+                inline=True
+            )
+            
+            await ctx.send(embed=embed)
+            
+    except Error as e:
+        await ctx.send(f"Error: {str(e)}")
