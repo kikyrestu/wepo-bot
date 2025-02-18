@@ -3121,7 +3121,9 @@ async def check_trial_reminders():
 # Start background task
 @bot.event
 async def on_ready():
-    check_trial_reminders.start()
+    print(f'Waduh! {bot.user} udah online nih!')
+    create_tables()  # Setup database tables
+    # check_trial_reminders.start()  # Disable dulu fitur ini
 
 @bot.command(name='adddev')
 @commands.is_owner()  # Hanya owner bot yang bisa pakai
