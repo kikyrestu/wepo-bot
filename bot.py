@@ -29,6 +29,12 @@ intents.guilds = True   # Tambahin ini buat akses guild/server
 # Bikin instance bot
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
+# Event handler
+@bot.event
+async def on_ready():
+    print(f'Waduh! {bot.user} udah online nih!')
+    create_tables()  # Setup database tables
+
 # Simpan tiket yang aktif
 active_tickets = {}
 
@@ -266,19 +272,14 @@ def get_db_cursor():
             connection.close()
 
 @bot.event
-async def on_ready():
-    print(f'Waduh! {bot.user} udah online nih!')
-    create_tables()  # Setup database tables
-    
-    @bot.event
-    async def on_command_error(ctx, error):
-        if isinstance(error, commands.MissingPermissions):
-            await ctx.send("❌ Lu ga punya permission buat pake command ini bre! Admin only 😎")
-        elif isinstance(error, commands.CommandNotFound):
-            await ctx.send("❌ Command ga ada bre! Coba cek !help")
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ Lu ga punya permission buat pake command ini bre! Admin only 😎")
+    elif isinstance(error, commands.CommandNotFound):
+        await ctx.send("❌ Command ga ada bre! Coba cek !help")
 
-    # Start background task
-    check_trial_reminders.start()
+# Start background task
+check_trial_reminders.start()
 
 # Setup kategori dan role handler
 async def setup_ticket_system(guild):
@@ -3117,13 +3118,6 @@ async def check_trial_reminders():
                     
     except Error as e:
         print(f"Error checking reminders: {e}")
-
-# Start background task
-@bot.event
-async def on_ready():
-    print(f'Waduh! {bot.user} udah online nih!')
-    create_tables()  # Setup database tables
-    # check_trial_reminders.start()  # Disable dulu fitur ini
 
 @bot.command(name='adddev')
 @commands.is_owner()  # Hanya owner bot yang bisa pakai
