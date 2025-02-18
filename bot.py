@@ -1854,8 +1854,8 @@ async def swap_categories(ctx, cat1: discord.CategoryChannel, cat2: discord.Cate
     except Exception as e:
         await ctx.send(f"Error: {str(e)}")
 
-@bot.command(name='help')
-async def help_command(ctx):
+@bot.command(name='menu')
+async def help_menu(ctx):
     """Tampilkan daftar perintah bot"""
     try:
         # Bikin embed pages
