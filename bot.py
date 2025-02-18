@@ -15,6 +15,7 @@ from contextlib import contextmanager
 import secrets
 import hashlib
 from typing import Optional
+from discord.ext import tasks
 
 # Load token dari file .env
 load_dotenv()
@@ -32,8 +33,8 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 active_tickets = {}
 
 # Tambahin variabel buat welcome message
-welcome_messages = {}
-welcome_channels = {}
+# welcome_messages = {}  # Hapus
+# welcome_channels = {}  # Hapus
 
 # Tambahin dictionary buat nyimpen queue musik per server
 music_queue = {}
@@ -189,6 +190,55 @@ def create_tables():
                 )
             """)
             
+            # Tabel untuk developer credentials
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS dev_credentials (
+                    user_id BIGINT PRIMARY KEY,
+                    username VARCHAR(255),
+                    token VARCHAR(255),
+                    last_login TIMESTAMP NULL,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Tabel untuk dev sessions
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS dev_sessions (
+                    session_id VARCHAR(64) PRIMARY KEY,
+                    user_id BIGINT,
+                    expires_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES dev_credentials(user_id)
+                )
+            """)
+            
+            # Tabel untuk dev logs
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS dev_logs (
+                    log_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    user_id BIGINT,
+                    action VARCHAR(255),
+                    details TEXT,
+                    executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES dev_credentials(user_id)
+                )
+            """)
+            
+            # Tabel untuk custom responses
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS custom_responses (
+                    response_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    guild_id BIGINT,
+                    trigger_word VARCHAR(100),
+                    response TEXT,
+                    created_by BIGINT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    UNIQUE KEY unique_trigger (guild_id, trigger_word)
+                )
+            """)
+            
             connection.commit()
             print("Database tables created successfully")
             
@@ -226,6 +276,9 @@ async def on_ready():
             await ctx.send("❌ Lu ga punya permission buat pake command ini bre! Admin only 😎")
         elif isinstance(error, commands.CommandNotFound):
             await ctx.send("❌ Command ga ada bre! Coba cek !help")
+
+    # Start background task
+    check_trial_reminders.start()
 
 # Setup kategori dan role handler
 async def setup_ticket_system(guild):
@@ -340,38 +393,32 @@ async def ping(ctx):
 async def set_welcome(ctx, *, message):
     """Set welcome message"""
     try:
-        connection = create_db_connection()
-        if not connection:
-            return await ctx.send("❌ Tidak bisa connect ke database!")
+        with get_db_cursor() as cursor:
+            # Simpan atau update welcome message
+            sql = """INSERT INTO welcome_messages (guild_id, message)
+                     VALUES (%s, %s)
+                     ON DUPLICATE KEY UPDATE message = %s"""
+            cursor.execute(sql, (ctx.guild.id, message, message))
             
-        cursor = connection.cursor()
-        
-        # Simpan atau update welcome message
-        sql = """INSERT INTO welcome_messages (guild_id, message)
-                 VALUES (%s, %s)
-                 ON DUPLICATE KEY UPDATE message = %s"""
-        values = (ctx.guild.id, message, message)
-        
-        cursor.execute(sql, values)
-        connection.commit()
-        
         await ctx.send(f'Sip bre! Welcome message udah diset:\n{message}')
-        
     except Error as e:
         await ctx.send(f"Error: {str(e)}")
-    finally:
-        if 'cursor' in locals():
-            cursor.close()
-        if 'connection' in locals():
-            connection.close()
 
 @bot.command(name='swc')
 @commands.has_permissions(administrator=True)
 async def set_welcome_channel(ctx, channel: discord.TextChannel):
-    """Set channel buat welcome message. Cara pake:
-    !swc #nama-channel"""
-    welcome_channels[ctx.guild.id] = channel.id
-    await ctx.send(f'Oke bre! Welcome message bakal muncul di {channel.mention}')
+    """Set channel buat welcome message"""
+    try:
+        with get_db_cursor() as cursor:
+            # Update atau insert channel
+            sql = """INSERT INTO welcome_messages (guild_id, channel_id)
+                     VALUES (%s, %s)
+                     ON DUPLICATE KEY UPDATE channel_id = %s"""
+            cursor.execute(sql, (ctx.guild.id, channel.id, channel.id))
+            
+        await ctx.send(f'Oke bre! Welcome message bakal muncul di {channel.mention}')
+    except Error as e:
+        await ctx.send(f"Error: {str(e)}")
 
 @bot.command(name='fakeuser')
 @commands.has_permissions(administrator=True)
@@ -2060,12 +2107,9 @@ bot.run(os.getenv('DISCORD_TOKEN'))
 @bot.event
 async def on_member_join(member):
     """Handle member join event"""
-    connection = create_db_connection()
-    if connection:
-        try:
-            cursor = connection.cursor()
-            
-            # Get welcome message
+    try:
+        with get_db_cursor() as cursor:
+            # Get welcome message dan channel
             cursor.execute("""
                 SELECT message, channel_id 
                 FROM welcome_messages 
@@ -2073,20 +2117,16 @@ async def on_member_join(member):
             """, (member.guild.id,))
             
             result = cursor.fetchone()
-            if result:
+            if result and result[0] and result[1]:  # Pastikan message dan channel ada
                 message, channel_id = result
+                channel = member.guild.get_channel(channel_id)
                 
-                if channel_id:
-                    channel = member.guild.get_channel(channel_id)
-                    if channel:
-                        welcome_msg = message.replace('{member}', member.mention)
-                        await channel.send(welcome_msg)
-                        
-        except Error as e:
-            print(f"Error handling member join: {e}")
-        finally:
-            cursor.close()
-            connection.close()
+                if channel:
+                    welcome_msg = message.replace('{member}', member.mention)
+                    await channel.send(welcome_msg)
+                    
+    except Error as e:
+        print(f"Error handling member join: {e}")
 
 def hash_token(token: str) -> str:
     """Hash token dengan SHA-256"""
@@ -2372,3 +2412,757 @@ async def dev_panel(ctx):
             await interaction.response.send_message("👋 Logged out!")
             
     await ctx.send(embed=embed, view=DevView())
+
+@bot.command(name='addresponse')
+@commands.has_permissions(administrator=True)
+async def add_response(ctx, trigger: str, *, response: str):
+    """Tambahin auto response (Premium only)"""
+    # Cek premium
+    if not await is_premium(ctx.guild.id):
+        return await ctx.send("❌ Command ini khusus premium bre! Ketik `!trial` buat dapetin trial 7 hari")
+        
+    try:
+        with get_db_cursor() as cursor:
+            # Cek apakah trigger udah ada
+            cursor.execute("""
+                SELECT response 
+                FROM custom_responses 
+                WHERE guild_id = %s AND trigger_word = %s AND is_active = TRUE
+            """, (ctx.guild.id, trigger.lower()))
+            
+            if cursor.fetchone():
+                return await ctx.send("❌ Trigger ini udah ada bre!")
+                
+            # Tambahin response baru
+            cursor.execute("""
+                INSERT INTO custom_responses 
+                (guild_id, trigger_word, response, created_by)
+                VALUES (%s, %s, %s, %s)
+            """, (ctx.guild.id, trigger.lower(), response, ctx.author.id))
+            
+        await ctx.send(f"✅ Oke bre! Bot bakal jawab `{response}` kalo ada yang ngomong `{trigger}`")
+        
+    except Error as e:
+        await ctx.send(f"Error: {str(e)}")
+
+@bot.command(name='responses')
+async def list_responses(ctx):
+    """Liat semua auto responses"""
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute("""
+                SELECT trigger_word, response 
+                FROM custom_responses 
+                WHERE guild_id = %s AND is_active = TRUE
+            """, (ctx.guild.id,))
+            
+            responses = cursor.fetchall()
+            
+            if not responses:
+                if await is_premium(ctx.guild.id):
+                    return await ctx.send("❌ Belom ada auto response bre! Tambahin pake `!addresponse`")
+                else:
+                    return await ctx.send("❌ Fitur ini khusus premium bre! Ketik `!trial` buat dapetin trial 7 hari")
+                    
+            embed = discord.Embed(
+                title="🤖 Auto Responses",
+                description="List semua auto response di server ini",
+                color=discord.Color.blue()
+            )
+            
+            for trigger, response in responses:
+                embed.add_field(
+                    name=f"💬 {trigger}",
+                    value=response,
+                    inline=False
+                )
+                
+            await ctx.send(embed=embed)
+            
+    except Error as e:
+        await ctx.send(f"Error: {str(e)}")
+
+@bot.command(name='delresponse')
+@commands.has_permissions(administrator=True)
+async def delete_response(ctx, trigger: str):
+    """Hapus auto response"""
+    if not await is_premium(ctx.guild.id):
+        return await ctx.send("❌ Command ini khusus premium bre! Ketik `!trial` buat dapetin trial 7 hari")
+        
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute("""
+                UPDATE custom_responses 
+                SET is_active = FALSE 
+                WHERE guild_id = %s AND trigger_word = %s
+            """, (ctx.guild.id, trigger.lower()))
+            
+            if cursor.rowcount > 0:
+                await ctx.send(f"✅ Auto response untuk trigger `{trigger}` udah dihapus!")
+            else:
+                await ctx.send("❌ Ga ketemu trigger itu bre!")
+                
+    except Error as e:
+        await ctx.send(f"Error: {str(e)}")
+
+# Update on_message event
+@bot.event
+async def on_message(message):
+    # Ignore bot messages
+    if message.author.bot:
+        return
+        
+    # Jika pesan dari DM
+    if isinstance(message.channel, discord.DMChannel):
+        await bot.process_commands(message)
+        return
+        
+    # Check auto responses
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute("""
+                SELECT response 
+                FROM custom_responses 
+                WHERE guild_id = %s AND trigger_word = %s AND is_active = TRUE
+            """, (message.guild.id, message.content.lower()))
+            
+            result = cursor.fetchone()
+            if result:
+                await message.channel.send(result[0])
+                
+    except Error as e:
+        print(f"Error checking responses: {e}")
+        
+    # Process commands
+    await bot.process_commands(message)
+
+async def is_premium(guild_id: int) -> bool:
+    """Cek apakah server punya akses premium"""
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute("""
+                SELECT end_date, is_active 
+                FROM premium_trials 
+                WHERE guild_id = %s
+            """, (guild_id,))
+            
+            result = cursor.fetchone()
+            if not result:
+                return False
+                
+            end_date, is_active = result
+            
+            # Auto update status kalo udah expired
+            if datetime.now() > end_date and is_active:
+                cursor.execute("""
+                    UPDATE premium_trials 
+                    SET is_active = FALSE 
+                    WHERE guild_id = %s
+                """, (guild_id,))
+                return False
+                
+            return is_active and datetime.now() < end_date
+            
+    except Error:
+        return False
+
+@bot.command(name='trial')
+@commands.has_permissions(administrator=True)
+async def start_trial(ctx):
+    """Mulai 7 hari trial premium"""
+    try:
+        with get_db_cursor() as cursor:
+            # Cek apakah server udah pernah trial
+            cursor.execute("""
+                SELECT * FROM premium_trials 
+                WHERE guild_id = %s
+            """, (ctx.guild.id,))
+            
+            if cursor.fetchone():
+                return await ctx.send("❌ Server lu udah pernah pake trial bre!")
+                
+            # Set trial 7 hari
+            end_date = datetime.now() + timedelta(days=7)
+            cursor.execute("""
+                INSERT INTO premium_trials 
+                (guild_id, activated_by, end_date) 
+                VALUES (%s, %s, %s)
+            """, (ctx.guild.id, ctx.author.id, end_date))
+            
+            embed = discord.Embed(
+                title="✨ Trial Premium Aktif!",
+                description="Server lu dapet akses premium selama 7 hari",
+                color=discord.Color.gold()
+            )
+            embed.add_field(
+                name="Expired",
+                value=f"<t:{int(end_date.timestamp())}:R>",
+                inline=False
+            )
+            embed.add_field(
+                name="Fitur Premium",
+                value="• Custom auto responses\n• Unlimited filter words\n• Advanced welcome system\n• Dan fitur² keren lainnya!",
+                inline=False
+            )
+            
+            await ctx.send(embed=embed)
+            
+    except Error as e:
+        await ctx.send(f"Error: {str(e)}")
+
+@bot.command(name='status')
+async def check_status(ctx):
+    """Cek status premium server"""
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute("""
+                SELECT end_date, is_active 
+                FROM premium_trials 
+                WHERE guild_id = %s
+            """, (ctx.guild.id,))
+            
+            result = cursor.fetchone()
+            if not result:
+                return await ctx.send("❌ Server lu belom pernah trial premium bre! Ketik `!trial` buat mulai")
+                
+            end_date, is_active = result
+            
+            if not is_active:
+                return await ctx.send("❌ Trial premium lu udah abis bre!")
+                
+            embed = discord.Embed(
+                title="💎 Premium Status",
+                color=discord.Color.blue()
+            )
+            embed.add_field(
+                name="Status",
+                value="✅ AKTIF" if datetime.now() < end_date else "❌ EXPIRED",
+                inline=True
+            )
+            embed.add_field(
+                name="Expired",
+                value=f"<t:{int(end_date.timestamp())}:R>",
+                inline=True
+            )
+            
+            await ctx.send(embed=embed)
+            
+    except Error as e:
+        await ctx.send(f"Error: {str(e)}")
+
+@bot.command(name='setwelcome')
+@commands.has_permissions(administrator=True)
+async def set_welcome_embed(ctx):
+    """Setup advanced welcome message (Premium only)"""
+    if not await is_premium(ctx.guild.id):
+        return await ctx.send("❌ Command ini khusus premium bre! Ketik `!trial` buat dapetin trial 7 hari")
+
+    # Bikin view untuk setup
+    class WelcomeSetup(View):
+        def __init__(self):
+            super().__init__(timeout=300)  # 5 menit timeout
+            
+        @discord.ui.button(label="Set Title", style=discord.ButtonStyle.blurple)
+        async def set_title(self, interaction: discord.Interaction, button: Button):
+            await interaction.response.send_message("Masukkan title untuk welcome embed:")
+            try:
+                msg = await bot.wait_for(
+                    'message', 
+                    timeout=60.0,
+                    check=lambda m: m.author == ctx.author and m.channel == ctx.channel
+                )
+                with get_db_cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO welcome_settings (guild_id, embed_title, is_embed) 
+                        VALUES (%s, %s, TRUE)
+                        ON DUPLICATE KEY UPDATE embed_title = %s
+                    """, (ctx.guild.id, msg.content, msg.content))
+                await ctx.send(f"✅ Title diset: {msg.content}")
+            except asyncio.TimeoutError:
+                await ctx.send("❌ Timeout! Coba lagi.")
+
+        @discord.ui.button(label="Set Description", style=discord.ButtonStyle.blurple)
+        async def set_desc(self, interaction: discord.Interaction, button: Button):
+            await interaction.response.send_message(
+                "Masukkan description untuk welcome embed:\n"
+                "Placeholders: {member}, {server}, {count}"
+            )
+            try:
+                msg = await bot.wait_for('message', timeout=60.0, check=lambda m: m.author == ctx.author)
+                with get_db_cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE welcome_settings 
+                        SET embed_description = %s, is_embed = TRUE
+                        WHERE guild_id = %s
+                    """, (msg.content, ctx.guild.id))
+                await ctx.send(f"✅ Description diset!")
+            except asyncio.TimeoutError:
+                await ctx.send("❌ Timeout! Coba lagi.")
+
+        @discord.ui.button(label="Set Color", style=discord.ButtonStyle.green)
+        async def set_color(self, interaction: discord.Interaction, button: Button):
+            await interaction.response.send_message("Masukkan warna dalam format hex (contoh: #ff0000):")
+            try:
+                msg = await bot.wait_for('message', timeout=60.0, check=lambda m: m.author == ctx.author)
+                if not msg.content.startswith('#') or len(msg.content) != 7:
+                    return await ctx.send("❌ Format warna salah! Contoh yang bener: #ff0000")
+                with get_db_cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE welcome_settings 
+                        SET embed_color = %s, is_embed = TRUE
+                        WHERE guild_id = %s
+                    """, (msg.content, ctx.guild.id))
+                await ctx.send(f"✅ Color diset ke {msg.content}")
+            except asyncio.TimeoutError:
+                await ctx.send("❌ Timeout! Coba lagi.")
+
+        @discord.ui.button(label="Set Image", style=discord.ButtonStyle.blurple)
+        async def set_image(self, interaction: discord.Interaction, button: Button):
+            await interaction.response.send_message("Kirim link gambar untuk welcome embed:")
+            try:
+                msg = await bot.wait_for('message', timeout=60.0, check=lambda m: m.author == ctx.author)
+                with get_db_cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE welcome_settings 
+                        SET embed_image = %s, is_embed = TRUE
+                        WHERE guild_id = %s
+                    """, (msg.content, ctx.guild.id))
+                await ctx.send(f"✅ Image diset!")
+            except asyncio.TimeoutError:
+                await ctx.send("❌ Timeout! Coba lagi.")
+
+        @discord.ui.button(label="Preview", style=discord.ButtonStyle.gray)
+        async def preview(self, interaction: discord.Interaction, button: Button):
+            with get_db_cursor() as cursor:
+                cursor.execute("""
+                    SELECT * FROM welcome_settings WHERE guild_id = %s
+                """, (ctx.guild.id,))
+                settings = cursor.fetchone()
+                
+            if not settings:
+                return await interaction.response.send_message("❌ Setup welcome message dulu!")
+
+            embed = discord.Embed(
+                title=settings[2] or "Welcome!",
+                description=(settings[3] or "Welcome {member} to {server}!")
+                    .replace("{member}", ctx.author.mention)
+                    .replace("{server}", ctx.guild.name)
+                    .replace("{count}", str(ctx.guild.member_count)),
+                color=discord.Color.from_str(settings[4] or "#7289DA")
+            )
+            
+            if settings[6]:  # embed_image
+                embed.set_image(url=settings[6])
+
+            await interaction.response.send_message("Preview welcome message:", embed=embed)
+
+    # Send setup message
+    embed = discord.Embed(
+        title="🔧 Welcome Message Setup",
+        description="Klik button di bawah buat setup welcome message",
+        color=discord.Color.blue()
+    )
+    
+    await ctx.send(embed=embed, view=WelcomeSetup())
+
+@bot.command(name='autorole')
+@commands.has_permissions(administrator=True)
+async def set_autorole(ctx, role: discord.Role):
+    """Set role yang auto dikasih ke member baru (Premium only)"""
+    if not await is_premium(ctx.guild.id):
+        return await ctx.send("❌ Command ini khusus premium bre! Ketik `!trial` buat dapetin trial 7 hari")
+        
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO welcome_autoroles (guild_id, role_id)
+                VALUES (%s, %s)
+                ON DUPLICATE KEY UPDATE role_id = %s
+            """, (ctx.guild.id, role.id, role.id))
+            
+        await ctx.send(f"✅ {role.mention} bakal auto dikasih ke member baru!")
+        
+    except Error as e:
+        await ctx.send(f"Error: {str(e)}")
+
+@bot.event
+async def on_member_join(member):
+    """Handle member join dengan advanced welcome"""
+    try:
+        with get_db_cursor() as cursor:
+            # Get welcome settings
+            cursor.execute("""
+                SELECT w.message, w.channel_id, ws.* 
+                FROM welcome_messages w
+                LEFT JOIN welcome_settings ws ON w.guild_id = ws.guild_id
+                WHERE w.guild_id = %s
+            """, (member.guild.id,))
+            
+            result = cursor.fetchone()
+            if not result or not result[1]:  # No channel set
+                return
+                
+            channel = member.guild.get_channel(result[1])
+            if not channel:
+                return
+                
+            # Check if using embed
+            if result[4]:  # is_embed
+                embed = discord.Embed(
+                    title=result[5] or "Welcome!",  # embed_title
+                    description=(result[6] or "Welcome {member} to {server}!")  # embed_description
+                        .replace("{member}", member.mention)
+                        .replace("{server}", member.guild.name)
+                        .replace("{count}", str(member.guild.member_count)),
+                    color=discord.Color.from_str(result[7] or "#7289DA")  # embed_color
+                )
+                
+                if result[9]:  # embed_image
+                    embed.set_image(url=result[9])
+                    
+                if result[10]:  # footer_text
+                    embed.set_footer(text=result[10])
+                    
+                await channel.send(embed=embed)
+            else:
+                # Regular text welcome
+                welcome_msg = result[0].replace('{member}', member.mention)
+                await channel.send(welcome_msg)
+                
+            # Check auto roles
+            cursor.execute("""
+                SELECT role_id FROM welcome_autoroles 
+                WHERE guild_id = %s
+            """, (member.guild.id,))
+            
+            for role_id in cursor.fetchall():
+                role = member.guild.get_role(role_id[0])
+                if role:
+                    try:
+                        await member.add_roles(role)
+                    except:
+                        continue
+                        
+    except Error as e:
+        print(f"Error handling member join: {e}")
+
+@bot.command(name='myserver')
+async def check_server_trial(ctx):
+    """Cek status trial server (DM only)"""
+    if not isinstance(ctx.channel, discord.DMChannel):
+        await ctx.message.delete()
+        return await ctx.send("❌ Command ini cuma bisa dipake di DM!", delete_after=5)
+
+    class ServerActions(View):
+        def __init__(self):
+            super().__init__(timeout=60)
+
+        @discord.ui.button(label="Set Reminder Channel", style=discord.ButtonStyle.blurple)
+        async def set_reminder(self, interaction: discord.Interaction, button: Button):
+            await interaction.response.send_message(
+                "Ketik ID channel yang mau dipake buat reminder:"
+            )
+            try:
+                msg = await bot.wait_for(
+                    'message',
+                    timeout=30.0,
+                    check=lambda m: m.author == ctx.author and m.channel == ctx.channel
+                )
+                
+                channel_id = int(msg.content)
+                guild = bot.get_guild(current_guild_id)  # Dari context server yang sedang ditampilkan
+                channel = guild.get_channel(channel_id)
+                
+                if not channel:
+                    return await ctx.send("❌ Channel tidak ditemukan!")
+                    
+                with get_db_cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO reminder_settings (guild_id, notify_channel_id)
+                        VALUES (%s, %s)
+                        ON DUPLICATE KEY UPDATE notify_channel_id = %s
+                    """, (guild.id, channel_id, channel_id))
+                    
+                await ctx.send(f"✅ Reminder akan dikirim ke channel {channel.mention}")
+                
+            except asyncio.TimeoutError:
+                await ctx.send("❌ Timeout! Coba lagi.")
+            except ValueError:
+                await ctx.send("❌ ID channel tidak valid!")
+
+        @discord.ui.button(label="Set Reminder Days", style=discord.ButtonStyle.green)
+        async def set_days(self, interaction: discord.Interaction, button: Button):
+            await interaction.response.send_message(
+                "Mau diingetin H-berapa sebelum expired? (1-7 hari)"
+            )
+            try:
+                msg = await bot.wait_for(
+                    'message',
+                    timeout=30.0,
+                    check=lambda m: m.author == ctx.author and m.channel == ctx.channel
+                )
+                
+                days = int(msg.content)
+                if not 1 <= days <= 7:
+                    return await ctx.send("❌ Masukkan angka 1-7!")
+                    
+                with get_db_cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO reminder_settings (guild_id, notify_days)
+                        VALUES (%s, %s)
+                        ON DUPLICATE KEY UPDATE notify_days = %s
+                    """, (current_guild_id, days, days))
+                    
+                await ctx.send(f"✅ Kamu akan diingatkan {days} hari sebelum trial habis")
+                
+            except asyncio.TimeoutError:
+                await ctx.send("❌ Timeout! Coba lagi.")
+            except ValueError:
+                await ctx.send("❌ Masukkan angka yang valid!")
+
+    # ... kode !myserver yang sudah ada ...
+    
+    # Tambahkan view ke embed
+    await ctx.send(embed=embed, view=ServerActions())
+
+@bot.command(name='filterset')
+@commands.has_permissions(administrator=True)
+async def filter_settings(ctx):
+    """Setup filter settings (Premium only)"""
+    if not await is_premium(ctx.guild.id):
+        return await ctx.send("❌ Command ini khusus premium bre! Ketik `!trial` buat dapetin trial 7 hari")
+        
+    class FilterSetup(View):
+        def __init__(self):
+            super().__init__(timeout=300)
+            
+        @discord.ui.button(label="Toggle Links", style=discord.ButtonStyle.blurple)
+        async def toggle_links(self, interaction: discord.Interaction, button: Button):
+            with get_db_cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO filter_settings (guild_id, links_enabled)
+                    VALUES (%s, TRUE)
+                    ON DUPLICATE KEY UPDATE links_enabled = NOT links_enabled
+                """, (ctx.guild.id,))
+                
+                # Get current status
+                cursor.execute("SELECT links_enabled FROM filter_settings WHERE guild_id = %s", (ctx.guild.id,))
+                status = cursor.fetchone()[0]
+                
+            await interaction.response.send_message(
+                f"✅ Link filter: {'AKTIF' if status else 'NONAKTIF'}"
+            )
+            
+        @discord.ui.button(label="Toggle Invites", style=discord.ButtonStyle.blurple)
+        async def toggle_invites(self, interaction: discord.Interaction, button: Button):
+            with get_db_cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO filter_settings (guild_id, invites_enabled)
+                    VALUES (%s, TRUE)
+                    ON DUPLICATE KEY UPDATE invites_enabled = NOT invites_enabled
+                """, (ctx.guild.id,))
+                
+                cursor.execute("SELECT invites_enabled FROM filter_settings WHERE guild_id = %s", (ctx.guild.id,))
+                status = cursor.fetchone()[0]
+                
+            await interaction.response.send_message(
+                f"✅ Invite filter: {'AKTIF' if status else 'NONAKTIF'}"
+            )
+            
+        @discord.ui.button(label="Auto Warn", style=discord.ButtonStyle.green)
+        async def toggle_warn(self, interaction: discord.Interaction, button: Button):
+            with get_db_cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO filter_settings (guild_id, auto_warn)
+                    VALUES (%s, TRUE)
+                    ON DUPLICATE KEY UPDATE auto_warn = NOT auto_warn
+                """, (ctx.guild.id,))
+                
+                cursor.execute("SELECT auto_warn FROM filter_settings WHERE guild_id = %s", (ctx.guild.id,))
+                status = cursor.fetchone()[0]
+                
+            await interaction.response.send_message(
+                f"✅ Auto warn: {'AKTIF' if status else 'NONAKTIF'}"
+            )
+            
+        @discord.ui.button(label="Auto Mute", style=discord.ButtonStyle.red)
+        async def toggle_mute(self, interaction: discord.Interaction, button: Button):
+            with get_db_cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO filter_settings (guild_id, auto_mute)
+                    VALUES (%s, TRUE)
+                    ON DUPLICATE KEY UPDATE auto_mute = NOT auto_mute
+                """, (ctx.guild.id,))
+                
+                cursor.execute("SELECT auto_mute FROM filter_settings WHERE guild_id = %s", (ctx.guild.id,))
+                status = cursor.fetchone()[0]
+                
+            await interaction.response.send_message(
+                f"✅ Auto mute: {'AKTIF' if status else 'NONAKTIF'}"
+            )
+            
+    embed = discord.Embed(
+        title="⚙️ Filter Settings",
+        description="Setup filter settings untuk server lu",
+        color=discord.Color.blue()
+    )
+    
+    await ctx.send(embed=embed, view=FilterSetup())
+
+# Update on_message event untuk handle filter
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+        
+    if isinstance(message.channel, discord.DMChannel):
+        await bot.process_commands(message)
+        return
+        
+    try:
+        with get_db_cursor() as cursor:
+            # Get filter settings
+            cursor.execute("""
+                SELECT * FROM filter_settings 
+                WHERE guild_id = %s
+            """, (message.guild.id,))
+            
+            settings = cursor.fetchone()
+            if settings:
+                content = message.content.lower()
+                violated = False
+                reason = ""
+                
+                # Check filtered words
+                cursor.execute("""
+                    SELECT word FROM filter_words 
+                    WHERE guild_id = %s
+                """, (message.guild.id,))
+                
+                for word in cursor.fetchall():
+                    if word[0] in content:
+                        violated = True
+                        reason = f"Filtered word: {word[0]}"
+                        break
+                
+                # Check links
+                if settings[2] and ('http://' in content or 'https://' in content):  # links_enabled
+                    violated = True
+                    reason = "Link detected"
+                
+                # Check invites
+                if settings[3] and ('discord.gg/' in content or 'discordapp.com/invite/' in content):  # invites_enabled
+                    violated = True
+                    reason = "Discord invite detected"
+                
+                if violated:
+                    await message.delete()
+                    
+                    # Handle auto warn
+                    if settings[4]:  # auto_warn
+                        cursor.execute("""
+                            INSERT INTO member_warnings (guild_id, user_id, reason, warned_by)
+                            VALUES (%s, %s, %s, %s)
+                        """, (message.guild.id, message.author.id, reason, bot.user.id))
+                        
+                        # Check warn threshold
+                        cursor.execute("""
+                            SELECT COUNT(*) FROM member_warnings
+                            WHERE guild_id = %s AND user_id = %s
+                        """, (message.guild.id, message.author.id))
+                        
+                        warn_count = cursor.fetchone()[0]
+                        
+                        if warn_count >= settings[7]:  # warn_threshold
+                            if settings[5]:  # auto_mute
+                                # Implement mute logic here
+                                mute_role = discord.utils.get(message.guild.roles, name="Muted")
+                                if not mute_role:
+                                    mute_role = await message.guild.create_role(name="Muted")
+                                    
+                                    for channel in message.guild.channels:
+                                        await channel.set_permissions(mute_role, send_messages=False)
+                                        
+                                await message.author.add_roles(mute_role)
+                                
+                                # Schedule unmute
+                                await asyncio.sleep(settings[6])  # mute_duration
+                                await message.author.remove_roles(mute_role)
+                                
+                            await message.channel.send(
+                                f"🔇 {message.author.mention} dimute karena terlalu banyak warning!"
+                            )
+                        else:
+                            await message.channel.send(
+                                f"⚠️ {message.author.mention} Warning {warn_count}/{settings[7]}: {reason}"
+                            )
+                    else:
+                        await message.channel.send(
+                            f"⚠️ {message.author.mention} Message lu ada yang dilarang: {reason}",
+                            delete_after=5
+                        )
+                    
+    except Error as e:
+        print(f"Error in filter: {e}")
+        
+    await bot.process_commands(message)
+
+@tasks.loop(hours=1)  # Cek setiap jam
+async def check_trial_reminders():
+    try:
+        with get_db_cursor() as cursor:
+            # Get semua trial yang aktif
+            cursor.execute("""
+                SELECT pt.guild_id, pt.end_date, rs.notify_channel_id, rs.notify_days
+                FROM premium_trials pt
+                JOIN reminder_settings rs ON pt.guild_id = rs.guild_id
+                WHERE pt.is_active = TRUE 
+                AND pt.end_date > CURRENT_TIMESTAMP
+                AND (rs.last_reminder IS NULL OR 
+                     rs.last_reminder < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 1 DAY))
+            """)
+            
+            for guild_id, end_date, channel_id, notify_days in cursor.fetchall():
+                # Hitung sisa hari
+                days_left = (end_date - datetime.now()).days
+                
+                if days_left == notify_days:
+                    guild = bot.get_guild(guild_id)
+                    if not guild:
+                        continue
+                        
+                    channel = guild.get_channel(channel_id)
+                    if not channel:
+                        continue
+                        
+                    # Kirim reminder
+                    embed = discord.Embed(
+                        title="⚠️ Trial Premium Reminder",
+                        description=f"Trial premium server ini akan berakhir dalam {days_left} hari!",
+                        color=discord.Color.yellow()
+                    )
+                    embed.add_field(
+                        name="Expired",
+                        value=f"<t:{int(end_date.timestamp())}:R>",
+                        inline=True
+                    )
+                    
+                    await channel.send(
+                        content="@everyone" if days_left == 1 else None,
+                        embed=embed
+                    )
+                    
+                    # Update last reminder
+                    cursor.execute("""
+                        UPDATE reminder_settings 
+                        SET last_reminder = CURRENT_TIMESTAMP
+                        WHERE guild_id = %s
+                    """, (guild_id,))
+                    
+    except Error as e:
+        print(f"Error checking reminders: {e}")
+
+# Start background task
+@bot.event
+async def on_ready():
+    check_trial_reminders.start()
